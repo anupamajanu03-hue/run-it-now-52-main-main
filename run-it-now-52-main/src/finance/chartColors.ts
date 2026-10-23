@@ -1,0 +1,21 @@
+/** Shared series colors (complete CSS colors). chart-1 blue = income, chart-2 green = collections/inflows,
+ * chart-3 orange = expenses/outflows, chart-4 purple = budgets, chart-5 teal = pending; red only for overdue/negative. */
+export const chartColors = {
+  income: "var(--chart-1)",
+  billed: "var(--chart-1)",
+  approved: "var(--chart-1)",
+  collected: "var(--chart-2)",
+  inflows: "var(--chart-2)",
+  secondary: "var(--chart-2)",
+  expenses: "var(--chart-3)",
+  outflows: "var(--chart-3)",
+  overdue: "var(--chart-danger)",
+  negative: "var(--chart-danger)",
+  budget: "var(--chart-4)",
+  planned: "var(--chart-4)",
+  projected: "var(--chart-4)",
+  actual: "var(--chart-4)",
+  outstanding: "var(--chart-5)",
+  pending: "var(--chart-5)",
+  baseline: "var(--chart-5)",
+} as const;

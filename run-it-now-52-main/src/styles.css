@@ -1,0 +1,456 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-danger-soft: var(--danger-soft);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-danger: var(--chart-danger);
+  --color-expense: var(--chart-3);
+  --color-expense-soft: color-mix(in oklab, var(--chart-3) 12%, transparent);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-overlay: var(--overlay);
+}
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+  --color-scheme: light;
+  --radius: 0.75rem;
+  --bg: #F8FAFC;
+  --surface: #FFFFFF;
+  --text: #0F172A;
+  --text-muted: #64748B;
+  --primary-soft: #E7F0FE;
+  --overlay: rgba(15, 23, 42, 0.52);
+  --rail-bg: #FFFFFF;
+  --rail-active: #E8F0FE;
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --primary: #0B66F0;
+  --primary-foreground: #FFFFFF;
+  --secondary: #F1F5F9;
+  --secondary-foreground: #1E293B;
+  --muted: #F1F5F9;
+  --muted-foreground: var(--text-muted);
+  --accent: var(--primary-soft);
+  --accent-foreground: #0B66F0;
+  --destructive: #DC2626;
+  --destructive-foreground: #FFFFFF;
+  --danger-soft: #FEECEC;
+  --success: #15803D;
+  --success-soft: #E7F6EC;
+  --warning: #854D0E;
+  --warning-soft: #FEF3C7;
+  --info: #0B6BA8;
+  --info-soft: #E8F4FD;
+  --border: #E2E8F0;
+  --input: #CBD5E1;
+  --ring: #0B66F0;
+  --chart-1: #2563EB;
+  --chart-2: #16A34A;
+  --chart-3: #EA580C;
+  --chart-4: #9333EA;
+  --chart-5: #0891B2;
+  --sidebar-bg: linear-gradient(180deg, #0B1F4D 0%, #13317F 100%);
+  --sidebar: #0B1F4D;
+  --sidebar-foreground: #FFFFFF;
+  --sidebar-muted: #CBD5E1;
+  --sidebar-primary: #0B66F0;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: rgba(255, 255, 255, 0.18);
+  --sidebar-accent-foreground: #FFFFFF;
+  --sidebar-border: rgba(255, 255, 255, 0.16);
+  --sidebar-ring: #93C5FD;
+  --chart-danger: #DC2626;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-scheme: dark;
+  --bg: #0F172A;
+  --surface: #1A2338;
+  --text: #F1F5F9;
+  --text-muted: #94A3B8;
+  --primary-soft: #16264A;
+  --overlay: rgba(0, 0, 0, 0.72);
+  --rail-bg: #0E1626;
+  --rail-active: #16264A;
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: #1A2338;
+  --popover-foreground: var(--text);
+  --primary: #4C8DFF;
+  --primary-foreground: #081230;
+  --secondary: #222C44;
+  --secondary-foreground: #F1F5F9;
+  --muted: #222C44;
+  --muted-foreground: var(--text-muted);
+  --accent: var(--primary-soft);
+  --accent-foreground: #BFDBFE;
+  --destructive: #F87171;
+  --destructive-foreground: #1F1014;
+  --danger-soft: #3A1A20;
+  --success: #4ADE80;
+  --success-soft: #123322;
+  --warning: #FBBF24;
+  --warning-soft: #382B0D;
+  --info: #7DD3FC;
+  --info-soft: #102C3D;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: #33415C;
+  --ring: #4C8DFF;
+  --chart-1: #3B82F6;
+  --chart-2: #22C55E;
+  --chart-3: #F97316;
+  --chart-4: #A855F7;
+  --chart-5: #06B6D4;
+  --sidebar-bg: linear-gradient(180deg, #0B1F4D 0%, #13317F 100%);
+  --sidebar: #0B1F4D;
+  --sidebar-foreground: #E5EAF3;
+  --sidebar-muted: #A8B4CA;
+  --sidebar-primary: #4C8DFF;
+  --sidebar-primary-foreground: #081230;
+  --sidebar-accent: rgba(255, 255, 255, 0.18);
+  --sidebar-accent-foreground: #FFFFFF;
+  --sidebar-border: rgba(255, 255, 255, 0.14);
+  --sidebar-ring: #93C5FD;
+  --chart-danger: #F87171;
+}
+
+:root.dark {
+  color-scheme: dark;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html {
+    color-scheme: var(--color-scheme);
+  }
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--background);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border: 2px solid var(--background);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+  }
+}
+
+@utility shadow-soft {
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px -8px rgba(15, 23, 42, 0.08);
+}
+
+@utility avatar-gradient {
+  background-image: linear-gradient(135deg, #0B66F0 0%, #9333EA 100%);
+}
+
+@utility num {
+  font-variant-numeric: tabular-nums;
+}
+
+@page receipt {
+  size: A5;
+  margin: 10mm;
+}
+
+@media print {
+  :root[data-theme="dark"] {
+    color-scheme: light !important;
+    --color-scheme: light;
+    --bg: #F8FAFC;
+    --surface: #FFFFFF;
+    --text: #0F172A;
+    --text-muted: #64748B;
+    --primary-soft: #E7F0FE;
+    --overlay: rgba(15, 23, 42, 0.52);
+    --rail-bg: #FFFFFF;
+    --rail-active: #E8F0FE;
+    --background: var(--bg);
+    --foreground: var(--text);
+    --card: var(--surface);
+    --card-foreground: var(--text);
+    --popover: var(--surface);
+    --popover-foreground: var(--text);
+    --primary: #0B66F0;
+    --primary-foreground: #FFFFFF;
+    --secondary: #F1F5F9;
+    --secondary-foreground: #1E293B;
+    --muted: #F1F5F9;
+    --muted-foreground: var(--text-muted);
+    --accent: var(--primary-soft);
+    --accent-foreground: #0B66F0;
+    --destructive: #DC2626;
+    --destructive-foreground: #FFFFFF;
+    --danger-soft: #FEECEC;
+    --success: #15803D;
+    --success-soft: #E7F6EC;
+    --warning: #854D0E;
+    --warning-soft: #FEF3C7;
+    --info: #0B6BA8;
+    --info-soft: #E8F4FD;
+    --border: #E2E8F0;
+    --input: #CBD5E1;
+    --ring: #0B66F0;
+    --chart-1: #2563EB;
+    --chart-2: #16A34A;
+    --chart-3: #EA580C;
+    --chart-4: #9333EA;
+    --chart-5: #0891B2;
+    --sidebar-bg: linear-gradient(180deg, #0B1F4D 0%, #13317F 100%);
+    --sidebar: #0B1F4D;
+    --sidebar-foreground: #FFFFFF;
+    --sidebar-muted: #CBD5E1;
+    --sidebar-primary: #0B66F0;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: rgba(255, 255, 255, 0.18);
+    --sidebar-accent-foreground: #FFFFFF;
+    --sidebar-border: rgba(255, 255, 255, 0.16);
+    --sidebar-ring: #93C5FD;
+  --chart-danger: #DC2626;
+  }
+  html {
+    color-scheme: light !important;
+  }
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  .receipt-print {
+    page: receipt;
+  }
+  .transaction-print {
+    page: receipt;
+    break-inside: avoid;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* Shared KPI row: two columns on small screens and one dynamic row on desktop. */
+.stat-grid { display: grid; gap: 1rem; align-items: stretch; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 360px) { .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .stat-grid { grid-template-columns: repeat(var(--stat-columns), minmax(0, 1fr)); } }
+.stat-card { container-type: inline-size; }
+.stat-value { font-size: clamp(1.125rem, 8cqw, 1.5rem); line-height: 1; }
+@media (max-width: 359px) { .stat-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.finance-menu-panel {
+  background-color: #07152f;
+  background-image: linear-gradient(180deg, #07152f 0%, #102954 100%);
+  border-right: 1px solid rgba(96, 165, 250, 0.22);
+}
+.finance-menu-panel > button {
+  top: 16px;
+  right: 10px;
+  display: flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(96, 165, 250, 0.45);
+  border-radius: 9999px;
+  color: #dbeafe;
+  opacity: 1;
+}
+.finance-menu-panel > button:focus:not(:focus-visible) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+.finance-menu-panel > button:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 2px #93c5fd !important;
+}
+.finance-menu-nav {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 2px;
+  overflow: hidden;
+  padding: 8px 10px;
+}
+.finance-menu-header {
+  display: flex;
+  height: 60px;
+  flex: 0 0 60px;
+  align-items: center;
+}
+.finance-menu-item {
+  height: auto;
+  min-height: 28px;
+  max-height: 40px;
+  flex: 1 1 0;
+}
+.finance-menu-footer {
+  display: flex;
+  height: 36px;
+  flex: 0 0 36px;
+  align-items: center;
+}
+
+@page financial-report {
+  size: A4;
+  margin: 14mm;
+}
+.financial-report-print { page: financial-report; }
+.financial-report-header {
+  margin-bottom: 1rem;
+  text-align: center;
+}
+.financial-report-header > p:last-child { margin-top: 0.25rem; }
+.financial-report-signatures {
+  display: flex;
+  justify-content: space-between;
+  gap: 4rem;
+  margin-top: 3rem;
+}
+.financial-report-signatures > div {
+  width: 40%;
+  border-top: 1px solid currentColor;
+  padding-top: 0.375rem;
+  text-align: center;
+}
+@media print {
+  .financial-report-print {
+    width: 100%;
+    padding: 0;
+    color: #111;
+    background: #fff;
+    box-shadow: none !important;
+    border: none !important;
+  }
+  .financial-report-print table { font-size: 9pt; }
+  .financial-report-book table { width: 100%; table-layout: fixed; }
+  .financial-report-book th:nth-child(1), .financial-report-book td:nth-child(1) { width: 12%; }
+  .financial-report-book th:nth-child(2), .financial-report-book td:nth-child(2) { width: 24%; white-space: normal; overflow-wrap: anywhere; }
+  .financial-report-book th:nth-child(3), .financial-report-book td:nth-child(3) { width: 14%; white-space: normal; overflow-wrap: anywhere; }
+  .financial-report-book th:nth-child(4), .financial-report-book td:nth-child(4) { width: 13%; }
+  .financial-report-book th:nth-child(5), .financial-report-book td:nth-child(5),
+  .financial-report-book th:nth-child(6), .financial-report-book td:nth-child(6),
+  .financial-report-book th:nth-child(7), .financial-report-book td:nth-child(7) { width: 12.33%; }
+}
+
+/* Paper-style fee receipt: always black on white with a red accent, in every theme. */
+.receipt-paper {
+  --receipt-ink: oklch(0.15 0 0);
+  --receipt-paper: oklch(1 0 0);
+  --receipt-red: oklch(0.52 0.2 27);
+  --receipt-line: oklch(0.85 0 0);
+  font-family: Georgia, "Times New Roman", serif;
+  color: var(--receipt-ink);
+  background: var(--receipt-paper);
+  border: 1px solid var(--receipt-line);
+  padding: 1.5rem 2rem;
+  font-size: 0.875rem;
+  break-inside: avoid;
+}
+.receipt-title { text-align: center; font-size: 1.25rem; font-weight: 700; letter-spacing: 0.08em; margin-bottom: 0.75rem; }
+.receipt-top { display: flex; justify-content: space-between; padding-bottom: 0.5rem; border-bottom: 1px solid var(--receipt-ink); }
+.receipt-accent { color: var(--receipt-red); font-weight: 700; }
+.receipt-row { display: flex; justify-content: space-between; gap: 1.5rem; padding: 0.4rem 0; border-bottom: 1px solid var(--receipt-line); }
+.receipt-label { flex-shrink: 0; }
+.receipt-value { text-align: right; font-weight: 600; }
+.receipt-section { margin-top: 0.9rem; padding-bottom: 0.25rem; font-size: 0.875rem; letter-spacing: 0.06em; }
+.receipt-options { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.25rem 0.9rem; }
+.receipt-option { display: inline-flex; align-items: center; gap: 0.3rem; font-weight: 400; }
+.receipt-box { display: inline-flex; align-items: center; justify-content: center; width: 0.9rem; height: 0.9rem; border: 1px solid var(--receipt-ink); font-size: 0.7rem; line-height: 1; }
+.receipt-signs { display: flex; justify-content: space-between; margin-top: 2.5rem; }
+.receipt-sign { min-width: 11rem; border-top: 1px solid var(--receipt-ink); padding-top: 0.25rem; text-align: center; }
+
+@page fee-receipt {
+  size: A5 landscape;
+  margin: 8mm 10mm;
+}
+@media print {
+  .fee-receipt-print { page: fee-receipt; break-inside: avoid; flex: none !important; height: auto !important; max-height: none !important; overflow: visible !important; padding: 0; font-size: 10pt; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+/* While printing a fee receipt: drop everything else from the page flow so only one A5 landscape page prints. */
+@media print {
+  html.printing-fee-receipt body > *:not(:has(.fee-receipt-print)) { display: none !important; }
+  html.printing-fee-receipt body *:has(.fee-receipt-print) {
+    position: static !important; transform: none !important; inset: auto !important;
+    width: auto !important; max-width: none !important; max-height: none !important; overflow: visible !important;
+    padding: 0 !important; margin: 0 !important; border: 0 !important; box-shadow: none !important; background: none !important;
+    display: block !important;
+  }
+  html.printing-fee-receipt .fee-receipt-print { position: static !important; width: auto !important; }
+  html.printing-fee-receipt, html.printing-fee-receipt body { background: oklch(1 0 0) !important; height: auto !important; min-height: 0 !important; }
+}

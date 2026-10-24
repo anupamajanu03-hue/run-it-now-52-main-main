@@ -1,6 +1,90 @@
 /** Pure helpers for creating a student bill. There is no discount or concession: billed = full course fee. */
 
+import type { PaymentMethod } from "./types";
+
 const pad = (n: number) => String(n).padStart(2, "0");
+
+export const PAYMENT_REFERENCE_METHODS = ["UPI", "Bank Transfer", "Cheque"] as const;
+export type PaymentReferenceMethod = (typeof PAYMENT_REFERENCE_METHODS)[number];
+
+export function getPaymentReferenceRule(method: PaymentMethod | "") {
+  switch (method) {
+    case "UPI":
+      return {
+        method: "UPI",
+        label: "UPI transaction ID",
+        helperText: "From the payment app or SMS",
+      } as const;
+    case "Bank Transfer":
+      return {
+        method: "Bank Transfer",
+        label: "Bank reference / UTR no.",
+        helperText: "NEFT, RTGS or IMPS reference",
+      } as const;
+    case "Cheque":
+      return {
+        method: "Cheque",
+        label: "Cheque no.",
+        helperText: "The 6-digit number printed on the cheque",
+      } as const;
+    default:
+      return null;
+  }
+}
+
+export function getPaymentReferenceState({
+  method,
+  reference,
+  personId,
+  recordedPayments,
+}: {
+  method: PaymentMethod | "";
+  reference: string;
+  personId?: string;
+  recordedPayments?: Array<{
+    personId?: string | null;
+    method: PaymentMethod;
+    reference: string;
+  }>;
+}) {
+  const rule = getPaymentReferenceRule(method);
+  const normalizedReference = reference.trim();
+  if (!rule) {
+    return {
+      rule: null,
+      helperText: "",
+      label: "",
+      error: "",
+      normalizedReference: "",
+      isValid: true,
+    };
+  }
+
+  let error = "";
+  if (!normalizedReference) {
+    error = `${rule.label} is required.`;
+  } else if (rule.method === "Cheque" && !/^\d{6}$/.test(normalizedReference)) {
+    error = "Cheque no. must be a 6-digit number.";
+  } else if (
+    recordedPayments &&
+    recordedPayments.some(
+      (payment) =>
+        payment.method !== "Cash" &&
+        payment.reference.trim().toLowerCase() === normalizedReference.toLowerCase(),
+    )
+  ) {
+    error = "This reference is already used for another payment.";
+  }
+
+  return {
+    rule,
+    helperText: rule.helperText,
+    label: rule.label,
+    error,
+    normalizedReference,
+    isValid: !error,
+  };
+}
 
 /** Adds whole months to an ISO date, clamping to the last day of the target month. Timezone-safe. */
 export function addMonthsISO(iso: string, months: number) {

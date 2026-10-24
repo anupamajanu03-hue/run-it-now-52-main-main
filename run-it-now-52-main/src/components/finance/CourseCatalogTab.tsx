@@ -9,6 +9,7 @@ import { EmptyState, Field, FilterBar, FilterSelect, SectionCard, SearchBox, Sim
 import { useFinance } from "@/finance/store";
 import { formatCourseDuration, SEED_DEPARTMENTS } from "@/finance/courses";
 import type { Course, CourseChange, CourseDurationUnit } from "@/finance/types";
+import { useEnterToNext } from "@/hooks/use-enter-to-next";
 
 const UNITS: CourseDurationUnit[] = ["days", "months", "years"];
 const STATUS_OPTIONS = ["Active", "Inactive"];
@@ -21,6 +22,7 @@ export function CourseCatalogTab() {
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [editingCourse, setEditingCourse] = useState<Course | null | undefined>(undefined);
   const [feeDrafts, setFeeDrafts] = useState<Record<string, string>>({});
+  const onEnterKeyDown = useEnterToNext();
 
   const filtered = useMemo(() => courseCatalog.courses.filter((course) =>
     (statusFilter === "all" || course.status === statusFilter) &&
@@ -136,12 +138,19 @@ export function CourseCatalogTab() {
                           <TableCell className="num">{course.serialNumber}</TableCell>
                           <TableCell className="font-medium">{course.name}</TableCell>
                           <TableCell>
-                            {course.department === "UG & PG" ? <span className="text-muted-foreground">Not set</span> : <div className="flex min-w-[180px] items-center gap-1">
+                            {course.department === "UG & PG" ? <span className="text-muted-foreground">Not set</span> : <form
+                              className="flex min-w-[180px] items-center gap-1"
+                              onSubmit={(event) => {
+                                event.preventDefault();
+                                saveFee(course);
+                              }}
+                              onKeyDown={onEnterKeyDown}
+                            >
                               <Input aria-label={`Course fee for ${course.name}`} type="number" min="0" step="0.01" className="h-8 w-28"
                                 placeholder="Not set" value={feeDrafts[course.id] ?? (course.fee === undefined ? "" : String(course.fee))}
                                 onChange={(event) => setFeeDrafts((current) => ({ ...current, [course.id]: event.target.value }))} />
-                              <Button variant="outline" size="sm" onClick={() => saveFee(course)}>Save</Button>
-                            </div>}
+                              <Button type="submit" variant="outline" size="sm">Save</Button>
+                            </form>}
                           </TableCell>
                           <TableCell>{formatCourseDuration(course.fastTrack)}</TableCell>
                           <TableCell>{formatCourseDuration(course.normalTrack)}</TableCell>
@@ -213,6 +222,7 @@ function CourseDialog({ course, existing, departments, onSave, onClose }: {
   const [normalEnabled, setNormalEnabled] = useState(!!course?.normalTrack);
   const [status, setStatus] = useState<Course["status"]>(course?.status ?? "Active");
   const [error, setError] = useState("");
+  const onEnterKeyDown = useEnterToNext();
   const feeAndNormalTrackDisabled = department === "UG & PG";
 
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
@@ -242,7 +252,7 @@ function CourseDialog({ course, existing, departments, onSave, onClose }: {
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
         <DialogHeader><DialogTitle>{course ? "Edit course" : "Add course"}</DialogTitle></DialogHeader>
-        <form onSubmit={submit}>
+        <form onSubmit={submit} onKeyDown={onEnterKeyDown}>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Course name" htmlFor="course-name"><Input id="course-name" value={name} onChange={(event) => setName(event.target.value)} /></Field>
             <Field label="Department" htmlFor="course-department"><SimpleSelect id="course-department" value={department} onChange={setDepartment} options={departments} /></Field>

@@ -34,7 +34,6 @@ import {
   allocatePayment,
   buildAdministrationDetailsPayload,
   hasAdministrationDetailsEvent,
-  hasDuplicatePaymentReference,
   installmentOutstanding,
   installmentPaid,
   installmentStatus,
@@ -45,8 +44,10 @@ import {
   ADMINISTRATION_DETAILS_SENT_TEXT,
   REQUIRE_APPLICATION_REVIEW,
 } from "@/finance/feeWorkflowConfig";
+import { getPaymentReferenceState } from "@/finance/billing";
 import { TODAY, formatDate, formatINR } from "@/finance/logic";
 import { PAYMENT_METHODS, type FeeWorkflowPayment, type PaymentMethod } from "@/finance/types";
+import { useEnterToNext } from "@/hooks/use-enter-to-next";
 
 export function RecordPaymentProvider({ children }: { children: ReactNode }) {
   const { feeWorkflow } = useFinance();
@@ -116,6 +117,7 @@ function RecordPaymentDialog({
   const [sendDetailsPrompt, setSendDetailsPrompt] = useState(false);
   const [sendPreviewOpen, setSendPreviewOpen] = useState(false);
   const recording = useRef(false);
+  const onEnterKeyDown = useEnterToNext();
   const person = feeWorkflow.persons.find((item) => item.id === personId);
   const payments = feeWorkflow.payments.filter((payment) => payment.personId === personId);
   const totals = person ? personTotals(person, payments) : null;
@@ -147,8 +149,22 @@ function RecordPaymentDialog({
           })
           .join(" + ")
       : "Enter a valid amount to preview allocation.";
+  const paymentReferenceState = getPaymentReferenceState({
+    method: form.method,
+    reference: form.reference,
+    personId: person?.id,
+    recordedPayments: [...billingPayments, ...feeWorkflow.payments].map((payment) => ({
+      personId: "personId" in payment ? payment.personId : payment.studentId,
+      method: payment.method,
+      reference: payment.reference,
+    })),
+  });
   const set = (key: keyof typeof form) => (value: string) => {
-    setForm((current) => ({ ...current, [key]: value }));
+    setForm((current) => {
+      const next = { ...current, [key]: value };
+      if (key === "method" && value === "Cash") next.reference = "";
+      return next;
+    });
     setError("");
   };
   const validate = () => {
@@ -158,15 +174,10 @@ function RecordPaymentDialog({
       return `Amount cannot exceed the outstanding balance (${formatINR(totals.outstanding)}).`;
     if (!form.date || form.date > TODAY) return "Choose a valid payment date.";
     if (!form.method) return "Choose a payment method.";
-    if (form.method !== "Cash" && !form.reference.trim())
-      return "Reference is required for non-cash payments.";
-    if (
-      form.reference &&
-      hasDuplicatePaymentReference(person.id, form.reference, feeWorkflow.payments)
-    )
-      return "This reference number is already recorded for this person.";
+    if (paymentReferenceState.error) return paymentReferenceState.error;
     return "";
   };
+  const submitDisabled = !!validate();
   const startSave = (event: FormEvent) => {
     event.preventDefault();
     const message = validate();
@@ -190,7 +201,7 @@ function RecordPaymentDialog({
       amount,
       date: form.date,
       method: form.method as PaymentMethod,
-      reference: form.reference.trim(),
+      reference: form.method === "Cash" ? "" : form.reference.trim(),
       receiptNo,
       allocations: allocatePayment(
         person.plan,
@@ -386,7 +397,12 @@ function RecordPaymentDialog({
                   ) : totals.outstanding <= 0 ? (
                     <p className="text-sm text-success">This fee plan is fully paid.</p>
                   ) : (
-                    <form id="record-payment-form" onSubmit={startSave} className="space-y-4">
+                    <form
+                      id="record-payment-form"
+                      onSubmit={startSave}
+                      onKeyDown={onEnterKeyDown}
+                      className="space-y-4"
+                    >
                       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                         <Field label="Receipt No." htmlFor="record-payment-receipt">
                           <Input
@@ -422,18 +438,28 @@ function RecordPaymentDialog({
                             )}
                           />
                         </Field>
-                        <Field label="Transaction reference no." htmlFor="record-payment-reference">
-                          <>
-                            <Input
-                              id="record-payment-reference"
-                              value={form.reference}
-                              onChange={(event) => set("reference")(event.target.value)}
-                            />
-                            <p className="text-xs text-muted-foreground">
-                              UPI transaction ID, cheque number or bank reference
-                            </p>
-                          </>
-                        </Field>
+                        {paymentReferenceState.rule && (
+                          <Field label={paymentReferenceState.label} htmlFor="record-payment-reference">
+                            <>
+                              <Input
+                                id="record-payment-reference"
+                                value={form.reference}
+                                onChange={(event) => set("reference")(event.target.value)}
+                                aria-invalid={!!paymentReferenceState.error}
+                              />
+                              {paymentReferenceState.helperText && (
+                                <p className="text-xs text-muted-foreground">
+                                  {paymentReferenceState.helperText}
+                                </p>
+                              )}
+                              {paymentReferenceState.error && (
+                                <p role="alert" className="text-sm text-destructive">
+                                  {paymentReferenceState.error}
+                                </p>
+                              )}
+                            </>
+                          </Field>
+                        )}
                         <Field label="Pay toward" htmlFor="record-payment-target">
                           <Select value={form.target} onValueChange={set("target")}>
                             <SelectTrigger id="record-payment-target">
@@ -474,7 +500,11 @@ function RecordPaymentDialog({
                   totals &&
                   (!REQUIRE_APPLICATION_REVIEW || person.applicationStatus !== "Received") &&
                   totals.outstanding > 0 && (
-                    <Button type="submit" form="record-payment-form" disabled={saving}>
+                    <Button
+                      type="submit"
+                      form="record-payment-form"
+                      disabled={saving || submitDisabled}
+                    >
                       Record payment
                     </Button>
                   )}

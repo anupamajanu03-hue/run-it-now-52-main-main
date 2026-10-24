@@ -93,8 +93,6 @@ const defaultSettings: FinanceSettings = {
     UPI: true,
     "Bank Transfer": true,
     Cheque: true,
-    Card: true,
-    Other: true,
   },
   receipt: {
     prefix: "RCP-2026-",

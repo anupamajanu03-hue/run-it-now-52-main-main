@@ -29,7 +29,7 @@ import {
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
-import { focusNextField } from "@/hooks/use-enter-to-next";
+import { focusNextField, focusPreviousField } from "@/hooks/use-enter-to-next";
 
 function statIcon(label: string) {
   const normalized = label.toLowerCase();
@@ -266,6 +266,7 @@ export function SimpleSelect({ id, value, onChange, options, placeholder = "Sele
 }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const selectionMade = useRef(false);
+  const selectionDirection = useRef<"next" | "previous">("next");
   return (
     <Select value={value} onValueChange={(next) => {
       selectionMade.current = true;
@@ -276,16 +277,22 @@ export function SimpleSelect({ id, value, onChange, options, placeholder = "Sele
         onKeyDown={(event) => {
           if (event.key === "Enter" && event.target instanceof HTMLElement && event.target.closest("[role='option']")) {
             selectionMade.current = true;
+            selectionDirection.current = event.shiftKey ? "previous" : "next";
           }
         }}
         onCloseAutoFocus={(event) => {
           if (!selectionMade.current) return;
           selectionMade.current = false;
+          const direction = selectionDirection.current;
+          selectionDirection.current = "next";
           const trigger = triggerRef.current;
           const form = trigger?.closest("form");
           if (!trigger || !form || form.dataset.enterNav === "off") return;
           event.preventDefault();
-          window.requestAnimationFrame(() => focusNextField(form, trigger));
+          window.requestAnimationFrame(() => {
+            if (direction === "previous") focusPreviousField(form, trigger);
+            else focusNextField(form, trigger);
+          });
         }}
       >
         {options.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}

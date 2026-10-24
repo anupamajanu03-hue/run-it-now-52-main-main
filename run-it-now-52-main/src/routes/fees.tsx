@@ -2528,6 +2528,7 @@ function Installments() {
     null,
   );
   const [meetingNote, setMeetingNote] = useState("");
+  const onMeetingEnterKeyDown = useEnterToNext();
   const [notifyPersonId, setNotifyPersonId] = useState<string | null>(null);
   useEffect(() => {
     if (!workflowAction || !workflowActionPersonId || !workflowActionInstallmentId) return;
@@ -2928,30 +2929,38 @@ function Installments() {
           <DialogHeader>
             <DialogTitle>In-Person Accounts Meeting Required</DialogTitle>
           </DialogHeader>
-          {meetingPerson && meetingInstallment && (
-            <div className="space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Demo follow-up for {meetingPerson.name} · {meetingInstallment.label}. No meeting is
-                scheduled externally.
-              </p>
-              <Field label="Demo follow-up note" htmlFor="meeting-note">
-                <Input
-                  id="meeting-note"
-                  value={meetingNote}
-                  onChange={(event) => setMeetingNote(event.target.value)}
-                  placeholder="Add a note for Accounts"
-                />
-              </Field>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMeetingRow(null)}>
-              Cancel
-            </Button>
-            <Button onClick={saveMeetingNote} disabled={!meetingNote.trim()}>
-              Save demo note
-            </Button>
-          </DialogFooter>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveMeetingNote();
+            }}
+            onKeyDown={onMeetingEnterKeyDown}
+          >
+            {meetingPerson && meetingInstallment && (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Demo follow-up for {meetingPerson.name} · {meetingInstallment.label}. No meeting is
+                  scheduled externally.
+                </p>
+                <Field label="Demo follow-up note" htmlFor="meeting-note">
+                  <Input
+                    id="meeting-note"
+                    value={meetingNote}
+                    onChange={(event) => setMeetingNote(event.target.value)}
+                    placeholder="Add a note for Accounts"
+                  />
+                </Field>
+              </div>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setMeetingRow(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!meetingNote.trim()}>
+                Save demo note
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
       <PaymentNotificationDialog

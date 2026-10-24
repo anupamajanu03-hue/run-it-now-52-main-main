@@ -1,13 +1,6 @@
 export type PaymentMethod =
   "Cash" | "UPI" | "Bank Transfer" | "Debit Card" | "Credit Card" | "Cheque" | "Card" | "Other";
-export const PAYMENT_METHODS: PaymentMethod[] = [
-  "Cash",
-  "UPI",
-  "Bank Transfer",
-  "Cheque",
-  "Card",
-  "Other",
-];
+export const PAYMENT_METHODS: PaymentMethod[] = ["Cash", "UPI", "Bank Transfer", "Cheque"];
 export const INCOME_PAYMENT_METHODS: PaymentMethod[] = [
   "Cash",
   "UPI",

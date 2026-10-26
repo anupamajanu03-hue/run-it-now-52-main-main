@@ -11,7 +11,7 @@ export function AttentionItemLink({ item, className }: { item: AttentionItem; cl
 
   switch (item.key) {
     case "overdue":
-      return <Link to="/fees" search={{ tab: "installments" }} className={className}>{children}</Link>;
+      return <Link to="/fees" search={{ tab: "billing", todayFilter: "overdue" }} className={className}>{children}</Link>;
     case "settlements":
       return <Link to="/settlements" search={{ tab: "overview" }} className={className}>{children}</Link>;
     case "petty":

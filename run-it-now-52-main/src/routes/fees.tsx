@@ -1,5 +1,5 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { addDays } from "date-fns";
+import { addDays, differenceInCalendarDays } from "date-fns";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -7,7 +7,16 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isValidPhone, monthlyInstallments } from "@/finance/billing";
 import { toast } from "sonner";
-import { Bell, Eye, MoreHorizontal, Plus, Receipt as ReceiptIcon, Check } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Bell,
+  Eye,
+  MoreHorizontal,
+  Plus,
+  Check,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -57,6 +66,7 @@ import {
   tabSearch,
 } from "@/components/finance/common";
 import { Receipt } from "@/components/finance/Receipt";
+import { AdministrationHistory } from "@/components/finance/AdministrationHistory";
 import { ApplicationDetail, ApplicationDetails } from "@/components/finance/ApplicationDetails";
 import { useRecordPayment } from "@/components/finance/RecordPaymentContext";
 import { useFinance } from "@/finance/store";
@@ -65,7 +75,6 @@ import {
   buildPaymentNotificationPayload,
   buildPaymentReminderEmail,
   appearsInBilling,
-  areAllPaymentsAdministrationNotified,
   canSendToAdministration,
   classAccess,
   hasAdministrationDetailsEvent,
@@ -74,11 +83,9 @@ import {
   installmentOutstanding,
   installmentPaid,
   installmentStatus,
-  isRecentlyPaidInstallment,
   isEligibleNow,
   nextAction,
   personTotals,
-  taskPriority,
   type FeeNextAction,
   type PaymentNotificationPayload,
 } from "@/finance/feeWorkflow";
@@ -107,11 +114,10 @@ import {
   type FeePayment,
   type FeeWorkflowPayment,
   type AdministrationDetailsSnapshot,
-  type HandoffHistoryEntry,
   type Person,
   type Student,
 } from "@/finance/types";
-import { ADMISSION_NO_FULL, ADMISSION_NO_SHORT } from "@/finance/labels";
+import { ADMISSION_NO_FULL } from "@/finance/labels";
 import { useEnterToNext } from "@/hooks/use-enter-to-next";
 
 export const Route = createFileRoute("/fees")({
@@ -126,6 +132,7 @@ export const Route = createFileRoute("/fees")({
     workflowAction?: string;
     workflowActionPersonId?: string;
     workflowActionInstallmentId?: string;
+    todayFilter?: "dueSoon" | "overdue" | "meeting";
   } => ({
     ...tabSearch(s),
     admissionPersonId: typeof s.admissionPersonId === "string" ? s.admissionPersonId : undefined,
@@ -138,9 +145,26 @@ export const Route = createFileRoute("/fees")({
       typeof s.workflowActionPersonId === "string" ? s.workflowActionPersonId : undefined,
     workflowActionInstallmentId:
       typeof s.workflowActionInstallmentId === "string" ? s.workflowActionInstallmentId : undefined,
+    todayFilter:
+      s.todayFilter === "dueSoon" || s.todayFilter === "overdue" || s.todayFilter === "meeting"
+        ? s.todayFilter
+        : undefined,
   }),
   beforeLoad: ({ search }) => {
-    if (search.tab === "receipts" || search.tab === "collection")
+    if (search.tab === "installments")
+      throw redirect({
+        to: "/fees",
+        search: {
+          tab: "billing",
+          todayFilter: "overdue",
+          billingPersonId: search.workflowActionPersonId,
+          workflowAction: search.workflowAction,
+          workflowActionPersonId: search.workflowActionPersonId,
+          workflowActionInstallmentId: search.workflowActionInstallmentId,
+        },
+        replace: true,
+      });
+    if (search.tab === "receipts" || search.tab === "collection" || search.tab === "handoffs")
       throw redirect({ to: "/fees", search: { tab: "billing" }, replace: true });
   },
   head: () => ({
@@ -163,10 +187,48 @@ export const Route = createFileRoute("/fees")({
 const LABEL: Record<string, string> = {
   applications: "Applications",
   billing: "Billing",
-  installments: "Installments",
-  handoffs: "Handoffs",
 };
 const STATUSES = ["Paid", "Partially Paid", "Pending", "Overdue"];
+type BillingSort = {
+  field: "nextDue" | "outstanding";
+  direction: "asc" | "desc";
+};
+
+function billingStatusLabel(
+  student: Student,
+  payments: FeePayment[],
+  person?: Person,
+  personPayments: FeeWorkflowPayment[] = [],
+) {
+  const status = billStatus(student, payments);
+  if (status !== "Overdue") return status;
+  const hasAdmissionNo = !!(person?.admissionNo || student.regNo);
+  if (!hasAdmissionNo)
+    return studentPaid(student.id, payments) > 0 ? "Partially Paid" : "Pending";
+  if (person) {
+    const oldestOverdue = person.plan
+      .filter((installment) => installmentStatus(installment, personPayments) === "Overdue")
+      .sort((left, right) => left.dueDate.localeCompare(right.dueDate))[0];
+    return `Overdue ${oldestOverdue ? installmentDaysOverdue(oldestOverdue) : 0}d`;
+  }
+  const oldestOverdue = installmentSchedule(
+    student,
+    studentPaid(student.id, payments),
+    TODAY,
+    payments,
+  )
+    .filter((installment) => installment.status === "Overdue")
+    .sort((left, right) => left.due.localeCompare(right.due))[0];
+  return `Overdue ${
+    oldestOverdue
+      ? differenceInCalendarDays(
+          new Date(`${TODAY}T00:00:00`),
+          new Date(`${oldestOverdue.due}T00:00:00`),
+        )
+      : 0
+  }d`;
+}
+
 function FeesPage() {
   const { tab = "billing" } = Route.useSearch();
   const navigate = Route.useNavigate();
@@ -176,27 +238,25 @@ function FeesPage() {
         crumbs={["Student Fees", LABEL[tab] ?? ""]}
         title={LABEL[tab] ?? "Student Fees"}
       />
-      {tab === "applications" || tab === "handoffs" ? (
+      {tab === "applications" ? (
         <div className="mb-4 rounded-xl bg-accent px-3.5 py-2 text-xs text-accent-foreground">
-          {tab === "applications"
-            ? "Application forms submitted by students (simulated)"
-            : "Demo data. Handoffs, reminders and class access are simulated."}
+          Application forms submitted by students (simulated)
         </div>
       ) : (
         <SampleNote />
       )}
-      <Tabs value={tab} onValueChange={(v) => navigate({ search: { tab: v } })} className="mb-4">
+      <Tabs
+        value={tab === "applications" ? "applications" : "billing"}
+        onValueChange={(v) => navigate({ search: { tab: v } })}
+        className="mb-4"
+      >
         <TabsList className="flex h-auto flex-wrap">
           <TabsTrigger value="applications">Applications</TabsTrigger>
           <TabsTrigger value="billing">Billing</TabsTrigger>
-          <TabsTrigger value="installments">Installments</TabsTrigger>
-          <TabsTrigger value="handoffs">Handoffs</TabsTrigger>
         </TabsList>
       </Tabs>
       {tab === "applications" && <Applications />}
-      {tab === "handoffs" && <Handoffs />}
-      {tab === "billing" && <Billing />}
-      {tab === "installments" && <Installments />}
+      {tab !== "applications" && <Billing />}
     </>
   );
 }
@@ -245,288 +305,17 @@ function useStudentFilters(studentList?: Student[]) {
   return { rows, bar };
 }
 
-function Handoffs() {
-  const { feeWorkflow } = useFinance();
-  const navigate = Route.useNavigate();
-  const [query, setQuery] = useState("");
-  const [eventFilter, setEventFilter] = useState("all");
-  const [selectedEntry, setSelectedEntry] = useState<{
-    entry: HandoffHistoryEntry;
-    personId: string;
-    eventType: string;
-  } | null>(null);
-  const personsById = new Map(feeWorkflow.persons.map((person) => [person.id, person]));
-  const eventTypeFor = (entry: HandoffHistoryEntry) => {
-    if (entry.text === ADMINISTRATION_DETAILS_SENT_TEXT) return "Details sent";
-    if (entry.text === ADMISSION_NO_RECEIVED_TEXT) return "Admission No. received";
-    if (entry.text === ADMINISTRATION_PAYMENT_NOTIFIED_TEXT) return "Payment notified";
-    return null;
-  };
-  const events = feeWorkflow.handoffs
-    .filter((handoff) => handoff.target === "Administration")
-    .flatMap((handoff) =>
-      handoff.history.flatMap((entry) => {
-        const eventType = eventTypeFor(entry);
-        return eventType ? [{ entry, personId: handoff.personId, eventType }] : [];
-      }),
-    );
-  const uniqueEvents = Array.from(
-    new Map(
-      events.map((event) => [
-        `${event.personId}|${event.eventType}|${event.entry.referenceId ?? ""}`,
-        event,
-      ]),
-    ).values(),
-  ).sort((left, right) => right.entry.date.localeCompare(left.entry.date));
-  const detailsSentEvents = uniqueEvents.filter((event) => event.eventType === "Details sent");
-  const awaitingAdmission = feeWorkflow.persons.filter(
+function normalizeContact(value: string) {
+  const digits = value.replace(/\D/g, "");
+  return digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits;
+}
+
+function workflowPersonForStudent(student: Student, persons: Person[]) {
+  return persons.find(
     (person) =>
-      !person.admissionNo && detailsSentEvents.some((event) => event.personId === person.id),
-  );
-  const admissionReceivedCount = new Set(
-    uniqueEvents
-      .filter((event) => event.eventType === "Admission No. received")
-      .map((event) => event.personId),
-  ).size;
-  const paymentNotifications = uniqueEvents.filter(
-    (event) => event.eventType === "Payment notified",
-  );
-  const searchText = query.trim().toLowerCase();
-  const filteredEvents = uniqueEvents.filter((event) => {
-    const person = personsById.get(event.personId);
-    return (
-      (eventFilter === "all" || event.eventType === eventFilter) &&
-      (!searchText ||
-        `${person?.name ?? ""} ${person?.applicationId ?? ""}`.toLowerCase().includes(searchText))
-    );
-  });
-  const selectedPerson = selectedEntry ? personsById.get(selectedEntry.personId) : undefined;
-  const selectedPayment = selectedEntry?.entry.referenceId
-    ? feeWorkflow.payments.find((payment) => payment.id === selectedEntry.entry.referenceId)
-    : undefined;
-  const selectedEventDate = selectedEntry?.entry.date.slice(0, 10);
-  const paymentSnapshot =
-    selectedEntry?.entry.paymentNotification ??
-    (selectedPayment && selectedPerson
-      ? {
-          date: selectedPayment.date,
-          amount: selectedPayment.amount,
-          installmentsCovered: selectedPayment.allocations.map((allocation) => ({
-            label:
-              selectedPerson.plan.find((installment) => installment.id === allocation.installmentId)
-                ?.label ?? allocation.installmentId,
-            amount: allocation.amount,
-          })),
-          remainingBalance: personTotals(
-            selectedPerson,
-            feeWorkflow.payments.filter(
-              (payment) =>
-                payment.personId === selectedPerson.id &&
-                selectedEventDate !== undefined &&
-                payment.date <= selectedEventDate,
-            ),
-          ).outstanding,
-        }
-      : undefined);
-  const eventTypes = ["Details sent", "Admission No. received", "Payment notified"];
-
-  return (
-    <div className="space-y-4">
-      <p className="rounded-lg bg-accent px-3.5 py-2 text-xs text-accent-foreground">
-        Payment recorded -&gt; full application details sent to Administration -&gt; Administration
-        creates the Admission No. -&gt; number recorded in Billing -&gt; Administration notified of
-        payments for batch and classes. All actions are simulated.
-      </p>
-      <StatGrid>
-        <StatCard label="Details sent" value={String(detailsSentEvents.length)} />
-        <StatCard label="Awaiting Admission No." value={String(awaitingAdmission.length)} />
-        <StatCard label="Admission No. received" value={String(admissionReceivedCount)} />
-        <StatCard label="Payments notified" value={String(paymentNotifications.length)} />
-      </StatGrid>
-
-      <SectionCard
-        title="Awaiting Admission No."
-        subtitle="Admission No. is created by Administration. Accounts only records it."
-        action={<StatusBadge status="Simulated" />}
-      >
-        {awaitingAdmission.length === 0 ? (
-          <EmptyState message="No applicants are awaiting an Admission No." />
-        ) : (
-          <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {awaitingAdmission.map((person) => (
-              <li
-                key={person.id}
-                className="flex min-w-0 items-center justify-between gap-3 rounded-lg border p-3"
-              >
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{person.name}</p>
-                  <p className="text-xs text-muted-foreground">{person.applicationId}</p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    navigate({ search: { tab: "billing", admissionPersonId: person.id } })
-                  }
-                >
-                  Go to Billing
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </SectionCard>
-
-      <SectionCard
-        title="Administration handoff history"
-        action={<StatusBadge status="Simulated" />}
-      >
-        <FilterBar>
-          <SearchBox
-            value={query}
-            onChange={setQuery}
-            placeholder="Search person or application ID"
-          />
-          <FilterSelect
-            label="Event type"
-            value={eventFilter}
-            onChange={setEventFilter}
-            options={eventTypes}
-          />
-        </FilterBar>
-        {filteredEvents.length === 0 ? (
-          <EmptyState message="No handoff activity yet" />
-        ) : (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Person</TableHead>
-                  <TableHead>Event type</TableHead>
-                  <TableHead>Text</TableHead>
-                  <TableHead>Details</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredEvents.map((event) => {
-                  const person = personsById.get(event.personId);
-                  return (
-                    <TableRow
-                      key={`${event.personId}-${event.eventType}-${event.entry.referenceId ?? ""}`}
-                    >
-                      <TableCell className="whitespace-nowrap">
-                        {formatDate(event.entry.date.slice(0, 10))}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        <button
-                          type="button"
-                          className="text-left font-medium text-primary underline underline-offset-4"
-                          onClick={() =>
-                            navigate({
-                              search: person?.applicationDetails
-                                ? { tab: "applications", applicationPersonId: person.id }
-                                : { tab: "billing", billingPersonId: person?.id },
-                            })
-                          }
-                        >
-                          {person?.name ?? event.personId}
-                        </button>
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={event.eventType} />
-                      </TableCell>
-                      <TableCell className="min-w-64">{event.entry.text}</TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {event.eventType === "Details sent" && event.entry.snapshot ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => setSelectedEntry(event)}
-                          >
-                            View sent details
-                          </Button>
-                        ) : event.eventType === "Payment notified" ? (
-                          <Button size="sm" variant="ghost" onClick={() => setSelectedEntry(event)}>
-                            View payment
-                          </Button>
-                        ) : (
-                          "—"
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </SectionCard>
-
-      <Dialog open={!!selectedEntry} onOpenChange={(open) => !open && setSelectedEntry(null)}>
-        <DialogContent className="flex max-h-[90dvh] w-[calc(100vw-1rem)] max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:w-[calc(100vw-2rem)]">
-          <DialogHeader className="sticky top-0 z-10 shrink-0 border-b bg-background px-4 py-4 pr-14 text-left sm:px-6">
-            <DialogTitle>
-              {selectedEntry?.eventType === "Details sent"
-                ? "Sent details snapshot"
-                : "Payment notified to Administration"}
-            </DialogTitle>
-            {selectedEntry && (
-              <p className="text-sm text-muted-foreground">
-                {selectedPerson?.name ?? selectedEntry.personId} ·{" "}
-                {formatDate(selectedEntry.entry.date.slice(0, 10))} · Simulated
-              </p>
-            )}
-          </DialogHeader>
-          {selectedEntry?.eventType === "Details sent" && selectedEntry.entry.snapshot && (
-            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
-              <ApplicationDetails
-                snapshot={selectedEntry.entry.snapshot}
-                plan={selectedPerson?.plan}
-              />
-            </div>
-          )}
-          {selectedEntry?.eventType === "Payment notified" && (
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 sm:p-6">
-              <p className="text-sm">
-                Tells Administration about the payment so the batch and classes can be created or
-                updated (simulated).
-              </p>
-              {paymentSnapshot ? (
-                <dl className="grid gap-3 text-sm sm:grid-cols-2">
-                  <ApplicationDetail
-                    label="Payment date"
-                    value={formatDate(paymentSnapshot.date)}
-                  />
-                  <ApplicationDetail label="Amount" value={formatINR(paymentSnapshot.amount)} />
-                  <ApplicationDetail
-                    label="Installments covered"
-                    value={
-                      paymentSnapshot.installmentsCovered
-                        .map(({ label, amount }) => `${label} (${formatINR(amount)})`)
-                        .join(", ") || "Not provided"
-                    }
-                  />
-                  <ApplicationDetail
-                    label="Remaining balance"
-                    value={formatINR(paymentSnapshot.remainingBalance)}
-                  />
-                </dl>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Payment details are unavailable for this legacy notification event.
-                </p>
-              )}
-            </div>
-          )}
-          <DialogFooter className="sticky bottom-0 z-10 shrink-0 border-t bg-background px-4 py-3 sm:px-6">
-            <Button variant="outline" onClick={() => setSelectedEntry(null)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+      person.id === student.id ||
+      (!!student.applicationId && person.applicationId === student.applicationId) ||
+      normalizeContact(person.contact) === normalizeContact(student.phone),
   );
 }
 
@@ -540,13 +329,11 @@ function Applications() {
   const [course, setCourse] = useState("all");
   const [status, setStatus] = useState("all");
   const [view, setView] = useState<Person | null>(null);
-  const [showingSentSnapshot, setShowingSentSnapshot] = useState(false);
   const [showSendPreview, setShowSendPreview] = useState(false);
   useEffect(() => {
     const linkedPerson = feeWorkflow.persons.find((person) => person.id === applicationPersonId);
     if (linkedPerson) {
       setView(linkedPerson);
-      setShowingSentSnapshot(false);
       if (applicationAction === "send") setShowSendPreview(true);
       if (applicationAction) navigate({ search: { tab: "applications" } });
     }
@@ -575,11 +362,6 @@ function Applications() {
     : [];
   const totals = view ? personTotals(view, payments) : undefined;
   const snapshot = view ? buildAdministrationDetailsPayload(view, payments) : undefined;
-  const sentEvent = view
-    ? feeWorkflow.handoffs
-        .find((handoff) => handoff.personId === view.id && handoff.target === "Administration")
-        ?.history.find((entry) => entry.snapshot)
-    : undefined;
   const administratorVerifiedAt = view
     ? feeWorkflow.handoffs
         .find((handoff) => handoff.personId === view.id && handoff.target === "Administration")
@@ -652,10 +434,7 @@ function Applications() {
                 {rows.map((person) => (
                   <TableRow
                     key={person.id}
-                    onRowClick={() => {
-                      setView(person);
-                      setShowingSentSnapshot(false);
-                    }}
+                    onRowClick={() => setView(person)}
                     rowLabel={`View application for ${person.name}`}
                   >
                     <TableCell className="whitespace-nowrap">{person.applicationId}</TableCell>
@@ -677,14 +456,7 @@ function Applications() {
                       <StatusBadge status={statusFor(person)} />
                     </TableCell>
                     <TableCell>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          setView(person);
-                          setShowingSentSnapshot(false);
-                        }}
-                      >
+                      <Button size="sm" variant="ghost" onClick={() => setView(person)}>
                         View
                       </Button>
                     </TableCell>
@@ -707,122 +479,89 @@ function Applications() {
       >
         <DialogContent className="flex max-h-[90dvh] w-[calc(100vw-1rem)] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:w-[calc(100vw-2rem)]">
           <DialogHeader className="sticky top-0 z-10 shrink-0 border-b bg-background px-4 py-4 pr-14 text-left sm:px-6">
-            <DialogTitle>{showingSentSnapshot ? "Sent details snapshot" : view?.name}</DialogTitle>
+            <DialogTitle>{view?.name}</DialogTitle>
             {view && (
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span>Application No. {view.applicationId}</span>
                 <span>Applied {formatDate(view.appliedOn)}</span>
-                {!showingSentSnapshot && (
-                  <>
-                    <StatusBadge status={statusFor(view)} />
-                    <StatusBadge
-                      status={
-                        view.admissionNo
-                          ? `Admission No. ${view.admissionNo}`
-                          : "Admission No. Pending"
-                      }
-                    />
-                  </>
-                )}
+                <StatusBadge status={statusFor(view)} />
+                <StatusBadge
+                  status={
+                    view.admissionNo ? `Admission No. ${view.admissionNo}` : "Admission No. Pending"
+                  }
+                />
               </div>
             )}
           </DialogHeader>
           {view && snapshot && (
             <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4 sm:p-6">
-              {showingSentSnapshot && sentEvent?.snapshot ? (
-                <>
-                  <ApplicationDetails snapshot={sentEvent.snapshot} plan={view.plan} />
-                  <Button variant="outline" onClick={() => setShowingSentSnapshot(false)}>
-                    Back to application
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <ApplicationDetails snapshot={snapshot} plan={view.plan} />
-                  {totals && (
-                    <section className="space-y-3">
-                      <h3 className="font-semibold">Fee summary</h3>
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Installment</TableHead>
-                            <TableHead>Due</TableHead>
-                            <TableHead className="text-right">Amount</TableHead>
-                            <TableHead className="text-right">Paid</TableHead>
-                            <TableHead>Status</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {view.plan.map((installment) => (
-                            <TableRow key={installment.id}>
-                              <TableCell>{installment.label}</TableCell>
-                              <TableCell>{formatDate(installment.dueDate)}</TableCell>
-                              <TableCell className="num text-right">
-                                {formatINR(installment.amountDue)}
-                              </TableCell>
-                              <TableCell className="num text-right">
-                                {formatINR(installmentPaid(installment.id, payments))}
-                              </TableCell>
-                              <TableCell>
-                                <StatusBadge status={installmentStatus(installment, payments)} />
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                      <div className="grid gap-3 sm:grid-cols-3">
-                        <ApplicationDetail label="Fee payable" value={formatINR(totals.payable)} />
-                        <ApplicationDetail label="Paid so far" value={formatINR(totals.paid)} />
-                        <ApplicationDetail
-                          label="Outstanding"
-                          value={formatINR(totals.outstanding)}
-                        />
-                      </div>
-                    </section>
-                  )}
-                  <section className="space-y-3 rounded-lg border p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h3 className="font-semibold">For office use only</h3>
-                      <StatusBadge status={fullyVerified ? "Fully verified" : "Pending"} />
-                    </div>
-                    <div className="grid gap-3 text-sm sm:grid-cols-2">
-                      <ApplicationDetail
-                        label="Accountant verification"
-                        value={
-                          accountantVerifiedAt
-                            ? `Verified · ${formatDate(accountantVerifiedAt)}`
-                            : "Pending"
-                        }
-                      />
-                      <ApplicationDetail
-                        label="Administrator verification"
-                        value={
-                          administratorVerifiedAt
-                            ? `Verified · ${formatDate(administratorVerifiedAt.slice(0, 10))}`
-                            : "Pending"
-                        }
-                      />
-                    </div>
-                  </section>
-                  {sentEvent && (
-                    <p className="text-sm text-muted-foreground">
-                      Sent to Administration on {formatDate(sentEvent.date.slice(0, 10))}.{" "}
-                      {sentEvent.snapshot && (
-                        <button
-                          type="button"
-                          className="font-medium text-primary underline underline-offset-4"
-                          onClick={() => setShowingSentSnapshot(true)}
-                        >
-                          View sent details
-                        </button>
-                      )}
-                    </p>
-                  )}
-                </>
+              <ApplicationDetails snapshot={snapshot} plan={view.plan} />
+              {totals && (
+                <section className="space-y-3">
+                  <h3 className="font-semibold">Fee summary</h3>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Installment</TableHead>
+                        <TableHead>Due</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead className="text-right">Paid</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {view.plan.map((installment) => (
+                        <TableRow key={installment.id}>
+                          <TableCell>{installment.label}</TableCell>
+                          <TableCell>{formatDate(installment.dueDate)}</TableCell>
+                          <TableCell className="num text-right">
+                            {formatINR(installment.amountDue)}
+                          </TableCell>
+                          <TableCell className="num text-right">
+                            {formatINR(installmentPaid(installment.id, payments))}
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge status={installmentStatus(installment, payments)} />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <ApplicationDetail label="Fee payable" value={formatINR(totals.payable)} />
+                    <ApplicationDetail label="Paid so far" value={formatINR(totals.paid)} />
+                    <ApplicationDetail label="Outstanding" value={formatINR(totals.outstanding)} />
+                  </div>
+                </section>
               )}
+              <section className="space-y-3 rounded-lg border p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="font-semibold">For office use only</h3>
+                  <StatusBadge status={fullyVerified ? "Fully verified" : "Pending"} />
+                </div>
+                <div className="grid gap-3 text-sm sm:grid-cols-2">
+                  <ApplicationDetail
+                    label="Accountant verification"
+                    value={
+                      accountantVerifiedAt
+                        ? `Verified · ${formatDate(accountantVerifiedAt)}`
+                        : "Pending"
+                    }
+                  />
+                  <ApplicationDetail
+                    label="Administrator verification"
+                    value={
+                      administratorVerifiedAt
+                        ? `Verified · ${formatDate(administratorVerifiedAt.slice(0, 10))}`
+                        : "Pending"
+                    }
+                  />
+                </div>
+              </section>
+              <AdministrationHistory personId={view.id} handoffs={feeWorkflow.handoffs} />
             </div>
           )}
-          {view && !showingSentSnapshot && (
+          {view && (
             <DialogFooter className="sticky bottom-0 z-10 flex-wrap gap-2 border-t bg-background px-4 py-3 sm:px-6">
               {REQUIRE_APPLICATION_REVIEW && view.applicationStatus === "Received" && (
                 <Button
@@ -900,22 +639,12 @@ function Billing() {
     receiveFeeWorkflowAdmissionNo,
     saveFeeWorkflowHandoff,
   } = useFinance();
-  const normalizeContact = (value: string) => {
-    const digits = value.replace(/\D/g, "");
-    return digits.length === 12 && digits.startsWith("91") ? digits.slice(2) : digits;
-  };
   const workflowStudents = useMemo(
     () =>
       feeWorkflow.persons
         .filter((person) => appearsInBilling(person, feeWorkflow.payments))
         .filter(
-          (person) =>
-            !students.some(
-              (student) =>
-                student.id === person.id ||
-                (!!student.applicationId && student.applicationId === person.applicationId) ||
-                normalizeContact(student.phone) === normalizeContact(person.contact),
-            ),
+          (person) => !students.some((student) => !!workflowPersonForStudent(student, [person])),
         )
         .map((person): Student => ({
           id: person.id,
@@ -944,7 +673,11 @@ function Billing() {
   const billingStudentIds = new Set(billingStudents.map((student) => student.id));
   const billingPayments = payments.filter((payment) => billingStudentIds.has(payment.studentId));
   const { rows, bar } = useStudentFilters(billingStudents);
-  const [view, setView] = useState<{ student: Student; initialSection?: "payments" } | null>(null);
+  const [view, setView] = useState<{
+    student: Student;
+    initialSection?: "installments" | "payments" | "followUp";
+    initialAction?: { action: "reminder" | "meeting"; installmentId: string };
+  } | null>(null);
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [remindSelected, setRemindSelected] = useState(false);
@@ -952,8 +685,12 @@ function Billing() {
   const [admissionNumber, setAdmissionNumber] = useState("");
   const [admissionError, setAdmissionError] = useState("");
   const [notifyPersonId, setNotifyPersonId] = useState<string | null>(null);
-  const [todayFilter, setTodayFilter] = useState<"all" | "dueSoon" | "overdue" | "meeting">("all");
-  const [showAllTasks, setShowAllTasks] = useState(false);
+  const { todayFilter: requestedTodayFilter, workflowAction, workflowActionInstallmentId } =
+    Route.useSearch();
+  const [todayFilter, setTodayFilter] = useState<"all" | "dueSoon" | "overdue" | "meeting">(
+    requestedTodayFilter ?? "all",
+  );
+  const [billingSort, setBillingSort] = useState<BillingSort | null>(null);
   useEffect(() => {
     if (linkedAdmissionPersonId) {
       const person = feeWorkflow.persons.find(
@@ -962,17 +699,36 @@ function Billing() {
       if (person && !person.admissionNo) setAdmissionPersonId(person.id);
     }
     if (billingPersonId) {
-      const student = billingStudents.find((candidate) => candidate.id === billingPersonId);
-      if (student && view?.student.id !== student.id) setView({ student });
+      const linkedPerson = feeWorkflow.persons.find((candidate) => candidate.id === billingPersonId);
+      const student = billingStudents.find(
+        (candidate) =>
+          candidate.id === billingPersonId ||
+          (!!linkedPerson && workflowPersonForStudent(candidate, [linkedPerson]) !== undefined),
+      );
+      if (student && view?.student.id !== student.id)
+        setView({
+          student,
+          initialSection: workflowAction ? "installments" : undefined,
+          initialAction:
+            workflowAction === "reminder" || workflowAction === "meeting"
+              ? {
+                  action: workflowAction,
+                  installmentId: workflowActionInstallmentId ?? "",
+                }
+              : undefined,
+        });
     }
-  }, [billingPersonId, billingStudents, feeWorkflow.persons, linkedAdmissionPersonId, view]);
+  }, [
+    billingPersonId,
+    billingStudents,
+    feeWorkflow.persons,
+    linkedAdmissionPersonId,
+    view,
+    workflowAction,
+    workflowActionInstallmentId,
+  ]);
   const personForStudent = (student: Student) =>
-    feeWorkflow.persons.find(
-      (person) =>
-        person.id === student.id ||
-        (!!student.applicationId && person.applicationId === student.applicationId) ||
-        normalizeContact(person.contact) === normalizeContact(student.phone),
-    );
+    workflowPersonForStudent(student, feeWorkflow.persons);
   const pendingAdministrationHandoff = (personId: string) =>
     feeWorkflow.handoffs.some(
       (handoff) =>
@@ -994,7 +750,7 @@ function Billing() {
   const reviewTasks = feeWorkflow.persons.filter(
     (person) => actionFor(person) === "Review Application",
   );
-  const dueSoonPeople = feeWorkflow.persons.filter((person) => {
+  const isDueSoonPerson = (person: Person) => {
     const personPayments = paymentsForPerson(person);
     return person.plan.some((installment) => {
       const installmentState = installmentStatus(installment, personPayments);
@@ -1005,37 +761,13 @@ function Billing() {
         installment.dueDate <= dueSoonCutoff
       );
     });
-  });
-  const overduePeople = feeWorkflow.persons.filter((person) =>
+  };
+  const isOverduePerson = (person: Person) =>
+    !!person.admissionNo &&
     person.plan.some(
       (installment) => installmentStatus(installment, paymentsForPerson(person)) === "Overdue",
-    ),
-  );
-  const meetingPeople = feeWorkflow.persons.filter(
-    (person) => actionFor(person) === "Arrange Meeting",
-  );
-  const dueSoonIds = new Set(dueSoonPeople.map((person) => person.id));
-  const overdueIds = new Set(overduePeople.map((person) => person.id));
-  const meetingIds = new Set(meetingPeople.map((person) => person.id));
-  const taskItems = feeWorkflow.persons
-    .flatMap((person) => {
-      const personPayments = paymentsForPerson(person);
-      const action = nextAction(person, personPayments, feeWorkflow.handoffs);
-      return action
-        ? [
-            {
-              person,
-              personPayments,
-              action,
-              priority: taskPriority(person, personPayments, feeWorkflow.handoffs),
-            },
-          ]
-        : [];
-    })
-    .sort(
-      (left, right) =>
-        left.priority - right.priority || left.person.name.localeCompare(right.person.name),
     );
+  const isMeetingRequiredPerson = (person: Person) => actionFor(person) === "Arrange Meeting";
   const targetInstallment = (person: Person, action: FeeNextAction) => {
     const personPayments = paymentsForPerson(person);
     const matching = person.plan.filter((installment) => {
@@ -1081,53 +813,75 @@ function Billing() {
     }
     const installment = targetInstallment(person, action);
     if (!installment) return;
-    navigate({
-      search: {
-        tab: "installments",
-        workflowAction: action === "Send Reminder" ? "reminder" : "meeting",
-        workflowActionPersonId: person.id,
-        workflowActionInstallmentId: installment.id,
+    const student = billingStudents.find(
+      (candidate) => workflowPersonForStudent(candidate, [person]) !== undefined,
+    );
+    if (!student) {
+      toast.error("This fee plan is not available in Billing.");
+      return;
+    }
+    setView({
+      student,
+      initialSection: "installments",
+      initialAction: {
+        action: action === "Send Reminder" ? "reminder" : "meeting",
+        installmentId: installment.id,
       },
     });
   };
-  const taskReason = (
-    person: Person,
-    action: FeeNextAction,
-    personPayments: FeeWorkflowPayment[],
-  ) => {
-    const overdue = person.plan.find(
-      (installment) => installmentStatus(installment, personPayments) === "Overdue",
-    );
-    const upcoming = person.plan.find(
-      (installment) =>
-        dueSoonIds.has(person.id) &&
-        installmentStatus(installment, personPayments) !== "Paid" &&
-        installment.dueDate >= TODAY &&
-        installment.dueDate <= dueSoonCutoff,
-    );
-    const totals = personTotals(person, personPayments);
-    if (overdue) {
-      return `${overdue.label}, ${formatINR(installmentOutstanding(overdue, personPayments))} overdue since ${formatDate(overdue.dueDate)}`;
-    }
-    if (action === "Send Reminder" && upcoming) {
-      return `${upcoming.label}, ${formatINR(installmentOutstanding(upcoming, personPayments))} due ${formatDate(upcoming.dueDate)}`;
-    }
-    if (action === "Review Application") return "Application received and awaiting review";
-    if (action === "Record Payment")
-      return `${formatINR(totals.outstanding)} outstanding on ${totals.nextDueInstallment?.label ?? "fee plan"}`;
-    if (action === "Enter Admission No.") return "Details sent; Admission No. pending";
-    if (action === "Send to Administration") return "Registration paid; ready to send";
-    if (action === "Arrange Meeting") return "Reminder limit reached; in-person follow-up required";
-    return "Overdue payment cleared; Administration notification pending";
-  };
-  const taskFilteredRows = rows.filter((student) => {
-    if (todayFilter === "all") return true;
+  const matchesTodayFilter = (student: Student, filter: typeof todayFilter) => {
+    if (filter === "all") return true;
     const person = personForStudent(student);
     if (!person) return false;
-    if (todayFilter === "dueSoon") return dueSoonIds.has(person.id);
-    if (todayFilter === "overdue") return overdueIds.has(person.id);
-    return meetingIds.has(person.id);
-  });
+    if (filter === "dueSoon") return isDueSoonPerson(person);
+    if (filter === "overdue") return isOverduePerson(person);
+    return isMeetingRequiredPerson(person);
+  };
+  const todayFilterCounts = {
+    dueSoon: rows.filter((student) => matchesTodayFilter(student, "dueSoon")).length,
+    overdue: rows.filter((student) => matchesTodayFilter(student, "overdue")).length,
+    meeting: rows.filter((student) => matchesTodayFilter(student, "meeting")).length,
+  };
+  const taskFilteredRows = rows.filter((student) => matchesTodayFilter(student, todayFilter));
+  const clearTodayFilter = () => {
+    setTodayFilter("all");
+    navigate({ search: { tab: "billing" } });
+  };
+  const toggleTodayFilter = (filter: Exclude<typeof todayFilter, "all">) => {
+    const nextFilter = todayFilter === filter ? "all" : filter;
+    setTodayFilter(nextFilter);
+    navigate({
+      search: {
+        tab: "billing",
+        todayFilter: nextFilter === "all" ? undefined : nextFilter,
+      },
+    });
+  };
+  const defaultSort: BillingSort | null =
+    todayFilter === "dueSoon" || todayFilter === "overdue"
+      ? { field: "nextDue", direction: "asc" }
+      : null;
+  const activeSort = billingSort ?? defaultSort;
+  const sortedTaskFilteredRows = activeSort
+    ? [...taskFilteredRows].sort((left, right) => {
+        if (activeSort.field === "nextDue") {
+          const leftDue = nextDue(left, billingPayments);
+          const rightDue = nextDue(right, billingPayments);
+          if (!leftDue || !rightDue) return leftDue ? -1 : rightDue ? 1 : 0;
+          const comparison = leftDue.localeCompare(rightDue);
+          return activeSort.direction === "asc" ? comparison : -comparison;
+        }
+        const comparison = outstanding(left, billingPayments) - outstanding(right, billingPayments);
+        return activeSort.direction === "asc" ? comparison : -comparison;
+      })
+    : taskFilteredRows;
+  const toggleBillingSort = (field: BillingSort["field"]) => {
+    const current = billingSort ?? defaultSort;
+    setBillingSort({
+      field,
+      direction: current?.field === field && current.direction === "asc" ? "desc" : "asc",
+    });
+  };
   const saveAdmissionNumber = () => {
     if (!admissionPersonId) return;
     const result = receiveFeeWorkflowAdmissionNo(admissionPersonId, admissionNumber);
@@ -1224,81 +978,42 @@ function Billing() {
         </button>
         <button
           type="button"
-          className="w-full min-w-0 text-left"
-          onClick={() => setTodayFilter((current) => (current === "dueSoon" ? "all" : "dueSoon"))}
+          aria-pressed={todayFilter === "dueSoon"}
+          className={`w-full min-w-0 rounded-2xl text-left ${todayFilter === "dueSoon" ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""}`}
+          onClick={() => toggleTodayFilter("dueSoon")}
         >
           <StatCard
             label="Payments due soon"
-            value={String(dueSoonPeople.length)}
+            value={String(todayFilterCounts.dueSoon)}
             caption="Filter Billing table"
           />
         </button>
         <button
           type="button"
-          className="w-full min-w-0 text-left"
-          onClick={() => setTodayFilter((current) => (current === "overdue" ? "all" : "overdue"))}
+          aria-pressed={todayFilter === "overdue"}
+          className={`w-full min-w-0 rounded-2xl text-left ${todayFilter === "overdue" ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""}`}
+          onClick={() => toggleTodayFilter("overdue")}
         >
           <StatCard
             label="Overdue fees"
-            value={String(overduePeople.length)}
-            tone={overduePeople.length ? "danger" : undefined}
+            value={String(todayFilterCounts.overdue)}
+            tone={todayFilterCounts.overdue ? "danger" : undefined}
             caption="Filter Billing table"
           />
         </button>
         <button
           type="button"
-          className="w-full min-w-0 text-left"
-          onClick={() => setTodayFilter((current) => (current === "meeting" ? "all" : "meeting"))}
+          aria-pressed={todayFilter === "meeting"}
+          className={`w-full min-w-0 rounded-2xl text-left ${todayFilter === "meeting" ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""}`}
+          onClick={() => toggleTodayFilter("meeting")}
         >
           <StatCard
             label="Meetings required"
-            value={String(meetingPeople.length)}
+            value={String(todayFilterCounts.meeting)}
             caption="Filter Billing table"
           />
         </button>
       </StatGrid>
-      <SectionCard
-        title="Priority tasks"
-        subtitle="Applicants are included in action counts; Billing totals remain based on billed rows and recorded payments."
-        action={
-          taskItems.length > 3 ? (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setShowAllTasks((current) => !current)}
-            >
-              {showAllTasks ? "Show top 3" : "View all"}
-            </Button>
-          ) : undefined
-        }
-      >
-        {taskItems.length === 0 ? (
-          <EmptyState message="No actions are pending." />
-        ) : (
-          <ul className="divide-y">
-            {(showAllTasks ? taskItems : taskItems.slice(0, 3)).map((task) => (
-              <li
-                key={`${task.person.id}-${task.action}`}
-                className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2 first:pt-0 last:pb-0"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{task.person.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {taskReason(task.person, task.action, task.personPayments)}
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => runNextAction(task.person, task.action)}
-                >
-                  {task.action}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </SectionCard>
       <SectionCard
         action={
           <div className="flex gap-2">
@@ -1308,7 +1023,10 @@ function Billing() {
                 Send reminders ({selected.length})
               </Button>
             )}
-            <Button size="sm" onClick={() => setCreating(true)}>
+            <Button
+              size="sm"
+              onClick={() => setCreating(true)}
+            >
               <Plus className="mr-1 h-4 w-4" />
               Create bill
             </Button>
@@ -1316,13 +1034,30 @@ function Billing() {
         }
       >
         {bar}
+        {todayFilter !== "all" && (
+          <div className="mb-3">
+            <Button
+              size="sm"
+              variant="secondary"
+              aria-label={`Clear ${todayFilter === "overdue" ? "Overdue" : todayFilter === "dueSoon" ? "Payments due soon" : "Meetings required"} filter`}
+              onClick={clearTodayFilter}
+            >
+              {todayFilter === "overdue"
+                ? `Overdue ${taskFilteredRows.length}`
+                : todayFilter === "dueSoon"
+                  ? `Payments due soon ${taskFilteredRows.length}`
+                  : `Meetings required ${taskFilteredRows.length}`}
+              <span aria-hidden="true">×</span>
+            </Button>
+          </div>
+        )}
         {taskFilteredRows.length === 0 ? (
           <EmptyState />
         ) : (
-          <Table>
+          <Table className="min-w-[1120px]">
             <TableHeader>
               <TableRow>
-                <TableHead>
+                <TableHead className="w-10 min-w-10">
                   <Checkbox
                     aria-label="Select all eligible visible students"
                     checked={
@@ -1342,21 +1077,71 @@ function Billing() {
                     }
                   />
                 </TableHead>
-                <TableHead>Student</TableHead>
-                <TableHead className="min-w-36">{ADMISSION_NO_SHORT}</TableHead>
-                <TableHead>Course</TableHead>
-                <TableHead>Registered</TableHead>
+                <TableHead className="sticky left-10 z-20 min-w-[190px] bg-background">
+                  Student
+                </TableHead>
+                <TableHead className="w-48 min-w-40 max-w-48">Course</TableHead>
                 <TableHead className="text-right">Billed</TableHead>
                 <TableHead className="text-right">Paid</TableHead>
-                <TableHead className="text-right">Outstanding</TableHead>
-                <TableHead>Next due</TableHead>
+                <TableHead
+                  className="text-right"
+                  aria-sort={
+                    activeSort?.field === "outstanding"
+                      ? activeSort.direction === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-end gap-1 whitespace-nowrap"
+                    onClick={() => toggleBillingSort("outstanding")}
+                  >
+                    Outstanding
+                    {activeSort?.field === "outstanding" ? (
+                      activeSort.direction === "asc" ? (
+                        <ArrowUp aria-hidden="true" className="h-3.5 w-3.5" />
+                      ) : (
+                        <ArrowDown aria-hidden="true" className="h-3.5 w-3.5" />
+                      )
+                    ) : (
+                      <ArrowUpDown aria-hidden="true" className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </TableHead>
+                <TableHead
+                  aria-sort={
+                    activeSort?.field === "nextDue"
+                      ? activeSort.direction === "asc"
+                        ? "ascending"
+                        : "descending"
+                      : "none"
+                  }
+                >
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 whitespace-nowrap"
+                    onClick={() => toggleBillingSort("nextDue")}
+                  >
+                    Next due
+                    {activeSort?.field === "nextDue" ? (
+                      activeSort.direction === "asc" ? (
+                        <ArrowUp aria-hidden="true" className="h-3.5 w-3.5" />
+                      ) : (
+                        <ArrowDown aria-hidden="true" className="h-3.5 w-3.5" />
+                      )
+                    ) : (
+                      <ArrowUpDown aria-hidden="true" className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Next action</TableHead>
-                <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {taskFilteredRows.map((s) => {
+              {sortedTaskFilteredRows.map((s) => {
                 const nd = nextDue(s, billingPayments);
                 const person = personForStudent(s);
                 const personPayments = person
@@ -1369,9 +1154,14 @@ function Billing() {
                 const action = person
                   ? nextAction(person, personPayments, feeWorkflow.handoffs)
                   : null;
+                const status = billingStatusLabel(s, billingPayments, person, personPayments);
+                const canRecordAdmissionNo =
+                  awaitingAdmissionNo || (!!person && action === "Enter Admission No.");
+                const hasReceipts = billingPayments.some((payment) => payment.studentId === s.id);
                 return (
                   <TableRow
                     key={s.id}
+                    className="group h-[68px]"
                     onRowClick={() => setView({ student: s })}
                     rowLabel={`View bill for ${s.name}`}
                   >
@@ -1391,13 +1181,16 @@ function Billing() {
                         />
                       )}
                     </TableCell>
-                    <TableCell className="font-medium">{s.name}</TableCell>
-                    <TableCell className="num whitespace-nowrap text-xs tabular-nums">
-                      {s.regNo ? s.regNo : <StatusBadge status="Pending" />}
+                    <TableCell className="sticky left-10 z-10 min-w-[190px] bg-background group-hover:bg-muted/50">
+                      <div className="truncate font-medium">{s.name}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {s.regNo || s.applicationId || "—"}
+                      </div>
                     </TableCell>
-                    <TableCell>{studentCourse(s, courseCatalog)?.name ?? s.course}</TableCell>
-                    <TableCell className="whitespace-nowrap">
-                      {formatDate(s.registeredOn)}
+                    <TableCell className="w-48 min-w-40 max-w-48">
+                      <div className="line-clamp-2">
+                        {studentCourse(s, courseCatalog)?.name ?? s.course}
+                      </div>
                     </TableCell>
                     <TableCell className="num whitespace-nowrap text-right tabular-nums">
                       {formatINR(s.totalFee)}
@@ -1412,56 +1205,29 @@ function Billing() {
                     </TableCell>
                     <TableCell className="whitespace-nowrap">{nd ? formatDate(nd) : "—"}</TableCell>
                     <TableCell>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <StatusBadge status={billStatus(s, billingPayments)} />
-                        {person &&
-                          personPayments.length > 0 &&
-                          areAllPaymentsAdministrationNotified(personPayments) && (
-                            <span className="whitespace-nowrap rounded-full border border-success/30 bg-success-soft px-2 py-0.5 text-xs font-medium text-success">
-                              Administration notified
-                            </span>
-                          )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {person && action ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            runNextAction(person, action);
-                          }}
-                        >
-                          {action}
-                        </Button>
-                      ) : null}
+                      {status.startsWith("Overdue ") ? (
+                        <span className="inline-flex whitespace-nowrap rounded-full border border-destructive/30 bg-danger-soft px-2.5 py-0.5 text-xs font-medium text-destructive">
+                          {status}
+                        </span>
+                      ) : (
+                        <StatusBadge status={status} />
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1 whitespace-nowrap">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setView({ student: s });
-                          }}
-                        >
-                          <Eye className="mr-1 h-4 w-4" />
-                          View
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setView({ student: s, initialSection: "payments" });
-                          }}
-                        >
-                          <ReceiptIcon className="mr-1 h-4 w-4" />
-                          Receipts
-                        </Button>
-                        {(awaitingAdmissionNo || hasUnnotifiedPayment) && (
+                        {person && action && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              runNextAction(person, action);
+                            }}
+                          >
+                            {action}
+                          </Button>
+                        )}
+                        {(hasReceipts || canRecordAdmissionNo || hasUnnotifiedPayment) && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <Button
@@ -1474,7 +1240,16 @@ function Billing() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
-                              {awaitingAdmissionNo && person && (
+                              {hasReceipts && (
+                                <DropdownMenuItem
+                                  onSelect={() =>
+                                    setView({ student: s, initialSection: "payments" })
+                                  }
+                                >
+                                  Receipts
+                                </DropdownMenuItem>
+                              )}
+                              {canRecordAdmissionNo && person && (
                                 <DropdownMenuItem
                                   onSelect={() => {
                                     setAdmissionPersonId(person.id);
@@ -1512,12 +1287,15 @@ function Billing() {
         }}
       >
         <DialogContent className="flex max-h-[90vh] w-[calc(100vw-2rem)] max-w-[900px] flex-col gap-0 overflow-hidden p-0">
-          <DialogHeader className="shrink-0 border-b px-6 py-4 pr-14">
-            <DialogTitle>Bill — {view?.student.name}</DialogTitle>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-y-auto p-6">
-            {view && <BillDetails student={view.student} initialSection={view.initialSection} />}
-          </div>
+          {view && (
+            <BillDetails
+              student={view.student}
+              initialSection={view.initialSection}
+              initialAction={view.initialAction}
+              onNotifyAdministration={setNotifyPersonId}
+              onClose={() => setView(null)}
+            />
+          )}
         </DialogContent>
       </Dialog>
       <ReminderPrompt
@@ -1582,99 +1360,413 @@ function Billing() {
         onOpenChange={(open) => !open && setNotifyPersonId(null)}
         onConfirm={confirmPaymentNotification}
       />
-      {creating && <CreateBill onClose={() => setCreating(false)} />}
+      {creating && (
+        <CreateBill
+          initialStudent={selected.length === 1 ? billingStudents.find((student) => student.id === selected[0]) : undefined}
+          onClose={() => setCreating(false)}
+        />
+      )}
     </>
   );
 }
 
 export function BillDetails({
   student,
-  initialSection,
+  initialSection = "installments",
+  initialAction,
+  onNotifyAdministration,
+  onClose,
 }: {
   student: Student;
-  initialSection?: "payments";
+  initialSection?: "installments" | "payments" | "followUp";
+  initialAction?: { action: "reminder" | "meeting"; installmentId: string };
+  onNotifyAdministration: (personId: string) => void;
+  onClose: () => void;
 }) {
-  const { payments, reminders, courseCatalog, feeWorkflow } = useFinance();
+  const {
+    payments,
+    reminders,
+    feeWorkflow,
+    settings,
+    logInstallmentReminder,
+    addInstallmentMeetingNote,
+  } = useFinance();
   const { open: openRecordPayment } = useRecordPayment();
+  const [section, setSection] = useState(initialSection);
   const [remind, setRemind] = useState(false);
+  const [reminderRow, setReminderRow] = useState<{
+    installmentId: string;
+    requestId: string;
+  } | null>(null);
+  const [meetingInstallmentId, setMeetingInstallmentId] = useState<string | null>(null);
+  const [meetingNote, setMeetingNote] = useState("");
   const [receipt, setReceipt] = useState<FeePayment | null>(null);
   const [workflowReceipt, setWorkflowReceipt] = useState<FeeWorkflowPayment | null>(null);
   const [emailPreviewReceiptId, setEmailPreviewReceiptId] = useState<string | null>(null);
-  const paymentsSectionRef = useRef<HTMLDivElement>(null);
+  const confirmedReminderIds = useRef(new Set<string>());
+  const handledInitialAction = useRef<string | null>(null);
+  const onMeetingEnterKeyDown = useEnterToNext();
   const paid = studentPaid(student.id, payments);
   const mine = payments.filter((p) => p.studentId === student.id);
-  const workflowPayments = feeWorkflow.payments
-    .filter((payment) => payment.personId === student.id)
-    .sort((left, right) => right.date.localeCompare(left.date));
+  const workflowPerson = workflowPersonForStudent(student, feeWorkflow.persons);
+  const workflowPayments = useMemo(
+    () =>
+      feeWorkflow.payments
+        .filter((payment) => payment.personId === workflowPerson?.id)
+        .sort((left, right) => right.date.localeCompare(left.date)),
+    [feeWorkflow.payments, workflowPerson?.id],
+  );
   const selectedWorkflowReceipt = workflowReceipt
     ? (feeWorkflow.payments.find((payment) => payment.id === workflowReceipt.id) ?? workflowReceipt)
     : null;
   const workflowPaymentKeys = new Set(workflowPayments.map((payment) => payment.id));
   const legacyPayments = mine.filter((payment) => !workflowPaymentKeys.has(payment.id));
   const due = outstanding(student, payments);
-  const canRemind =
-    due > 0 ||
-    installmentSchedule(student, paid, TODAY, payments).some(
-      (i) => i.status === "Pending" || i.status === "Overdue",
-    );
+  const canRemind = due > 0;
   const history = reminders
     .filter((r) => r.studentId === student.id)
     .sort((a, b) => b.sentAt.localeCompare(a.sentAt));
-  const course = studentCourse(student, courseCatalog);
+  const workflowTotals = workflowPerson ? personTotals(workflowPerson, workflowPayments) : null;
+  const statusLabel = billingStatusLabel(student, payments, workflowPerson, workflowPayments);
+  const meetingInstallment = workflowPerson?.plan.find(
+    (installment) => installment.id === meetingInstallmentId,
+  );
+  const reminderInstallment = workflowPerson?.plan.find(
+    (installment) => installment.id === reminderRow?.installmentId,
+  );
+  const reminderAmount = reminderInstallment
+    ? installmentOutstanding(reminderInstallment, workflowPayments)
+    : 0;
+  const reminderEmail =
+    workflowPerson && reminderInstallment
+      ? buildPaymentReminderEmail(
+          {
+            name: workflowPerson.name,
+            email: workflowPerson.email,
+            course: workflowPerson.course,
+          },
+          reminderInstallment.label,
+          reminderAmount,
+          reminderInstallment.dueDate,
+          settings.institution.name,
+        )
+      : null;
+  const defaultReminderInstallment = workflowPerson?.plan
+    .filter(
+      (installment) =>
+        installmentOutstanding(installment, workflowPayments) > 0 &&
+        installment.reminders.length < MAX_REMINDERS &&
+        (installmentStatus(installment, workflowPayments) === "Overdue" ||
+          installmentFollowUpStatus(installment, workflowPayments) === "Reminder Due"),
+    )
+    .sort((left, right) => left.dueDate.localeCompare(right.dueDate))[0];
+  const notificationPayload = workflowPerson
+    ? buildPaymentNotificationPayload(workflowPerson, feeWorkflow.payments)
+    : null;
+  const hasUnnotifiedPayments = !!notificationPayload?.payments.length;
+  const classAccessStatus = workflowPerson
+    ? classAccess(workflowPerson, workflowPayments) ?? "Payment Cleared"
+    : "Payment Cleared";
+  const planRows = workflowPerson
+    ? workflowPerson.plan.map((installment) => {
+        const rowPaid = installmentPaid(installment.id, workflowPayments);
+        const rowOutstanding = installmentOutstanding(installment, workflowPayments);
+        const rawStatus = installmentStatus(installment, workflowPayments);
+        const showOverdue = !!workflowPerson.admissionNo && rawStatus === "Overdue";
+        return {
+          id: installment.id,
+          label: installment.label,
+          dueDate: installment.dueDate,
+          amount: installment.amountDue,
+          paid: rowPaid,
+          outstanding: rowOutstanding,
+          status:
+            rawStatus === "Overdue" && !workflowPerson.admissionNo
+              ? rowPaid > 0
+                ? "Partially Paid"
+                : "Pending"
+              : showOverdue
+                ? `Overdue ${installmentDaysOverdue(installment)}d`
+                : rawStatus,
+          daysOverdue: showOverdue ? installmentDaysOverdue(installment) : 0,
+          followUp: installmentFollowUpStatus(installment, workflowPayments),
+          canRemind:
+            rowOutstanding > 0 &&
+            installment.reminders.length < MAX_REMINDERS &&
+            (rawStatus === "Overdue" ||
+              installmentFollowUpStatus(installment, workflowPayments) === "Reminder Due"),
+          meetingNotes: installment.meetingNotes,
+          isWorkflowInstallment: true,
+        };
+      })
+    : installmentSchedule(student, paid, TODAY, payments).map((installment, index) => ({
+        id: `${student.id}-I${index + 1}`,
+        label: installment.label,
+        dueDate: installment.due,
+        amount: installment.amount,
+        paid: installment.paid,
+        outstanding: installment.balance,
+        status:
+          installment.status === "Overdue" && !student.regNo
+            ? installment.paid > 0
+              ? "Partially Paid"
+              : "Pending"
+            : installment.status,
+        daysOverdue:
+          installment.status === "Overdue" && student.regNo
+            ? differenceInCalendarDays(
+                new Date(`${TODAY}T00:00:00`),
+                new Date(`${installment.due}T00:00:00`),
+              )
+            : 0,
+        followUp: null,
+        canRemind: false,
+        meetingNotes: [],
+        isWorkflowInstallment: false,
+      }));
   useEffect(() => {
-    if (initialSection === "payments")
-      paymentsSectionRef.current?.scrollIntoView({ block: "start" });
+    setSection(initialSection);
   }, [initialSection, student.id]);
+  useEffect(() => {
+    if (!initialAction) return;
+    const actionKey = `${student.id}:${initialAction.action}:${initialAction.installmentId}`;
+    if (handledInitialAction.current === actionKey) return;
+    handledInitialAction.current = actionKey;
+    setSection("installments");
+    if (initialAction.action === "reminder") {
+      const target =
+        workflowPerson?.plan.find((item) => item.id === initialAction.installmentId) ??
+        defaultReminderInstallment;
+      if (target) {
+        setReminderRow({
+          installmentId: target.id,
+          requestId: `REM-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        });
+      }
+    } else {
+      const target =
+        workflowPerson?.plan.find((item) => item.id === initialAction.installmentId) ??
+        workflowPerson?.plan.find(
+          (item) =>
+            installmentFollowUpStatus(item, workflowPayments) ===
+            "In-Person Follow-Up Required",
+        );
+      if (target) setMeetingInstallmentId(target.id);
+    }
+  }, [
+    defaultReminderInstallment,
+    initialAction?.action,
+    initialAction?.installmentId,
+    student.id,
+    workflowPerson,
+    workflowPayments,
+  ]);
+  const requestReminder = (installmentId: string) => {
+    setReminderRow({
+      installmentId,
+      requestId: `REM-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    });
+  };
+  const confirmReminder = () => {
+    if (
+      !workflowPerson ||
+      !reminderRow ||
+      !reminderInstallment ||
+      reminderAmount <= 0 ||
+      confirmedReminderIds.current.has(reminderRow.requestId)
+    )
+      return;
+    if (
+      reminderInstallment.reminders.some((reminder) => reminder.id === reminderRow.requestId) ||
+      reminderInstallment.reminders.length >= MAX_REMINDERS
+    ) {
+      toast.error("This reminder has already been recorded or the reminder limit was reached.");
+      setReminderRow(null);
+      return;
+    }
+    confirmedReminderIds.current.add(reminderRow.requestId);
+    logInstallmentReminder(workflowPerson.id, reminderInstallment.id, {
+      id: reminderRow.requestId,
+      date: new Date().toISOString(),
+      text: "Reminder sent (simulated)",
+    });
+    setReminderRow(null);
+    toast.success("Reminder logged (simulated). No message was sent.");
+  };
+  const saveMeetingNote = () => {
+    if (!workflowPerson || !meetingInstallment || !meetingNote.trim()) return;
+    addInstallmentMeetingNote(
+      workflowPerson.id,
+      meetingInstallment.id,
+      `${new Date().toISOString()} — ${meetingNote.trim()}`,
+    );
+    setMeetingNote("");
+    setMeetingInstallmentId(null);
+    toast.success("Demo meeting follow-up note saved.");
+  };
+  const showNotification = () => {
+    if (workflowPerson && classAccessStatus === "Payment Cleared" && hasUnnotifiedPayments)
+      onNotifyAdministration(workflowPerson.id);
+  };
+  const handleInstallmentAction = (row: (typeof planRows)[number]) => {
+    if (!workflowPerson || !row.isWorkflowInstallment) return;
+    if (row.followUp === "In-Person Follow-Up Required") {
+      setMeetingNote("");
+      setMeetingInstallmentId(row.id);
+    } else if (row.canRemind) {
+      requestReminder(row.id);
+    } else if (row.outstanding > 0) {
+      openRecordPayment(workflowPerson.id);
+    }
+  };
   return (
-    <div className="space-y-4 text-sm">
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={due <= 0} onClick={() => openRecordPayment(student.id)}>
-          Collect payment
-        </Button>
-        {canRemind && (
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={!student.phone.trim()}
-            onClick={() => setRemind(true)}
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden text-sm">
+      <DialogHeader className="shrink-0 border-b px-4 py-4 pr-14 sm:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <DialogTitle className="truncate">{student.name}</DialogTitle>
+            <p className="mt-1 truncate text-xs text-muted-foreground">
+              <span className="font-medium">
+                {workflowPerson?.admissionNo || student.regNo
+                  ? ADMISSION_NO_FULL
+                  : "Application ID"}
+                :
+              </span>{" "}
+              {workflowPerson?.admissionNo || student.regNo || student.applicationId || "—"}
+            </p>
+            <div className="mt-2">
+              {statusLabel.startsWith("Overdue ") ? (
+                <span className="inline-flex whitespace-nowrap rounded-full border border-destructive/30 bg-danger-soft px-2.5 py-0.5 text-xs font-medium text-destructive">
+                  {statusLabel}
+                </span>
+              ) : (
+                <StatusBadge status={statusLabel} />
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" disabled={due <= 0 || !workflowPerson} onClick={() => workflowPerson && openRecordPayment(workflowPerson.id)}>
+              Collect payment
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={
+                !canRemind ||
+                (!!workflowPerson && !defaultReminderInstallment) ||
+                !student.phone.trim()
+              }
+              onClick={() => {
+                if (defaultReminderInstallment) requestReminder(defaultReminderInstallment.id);
+                else setRemind(true);
+              }}
+            >
+              Send reminder
+            </Button>
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-3 rounded-lg bg-muted/50 px-3 py-2">
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Billed</p>
+            <p className="num whitespace-nowrap font-semibold">{formatINR(student.totalFee)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Recorded</p>
+            <p className="num whitespace-nowrap font-semibold">{formatINR(workflowTotals?.paid ?? paid)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Remaining</p>
+            <p className={`num whitespace-nowrap font-semibold ${due > 0 ? "text-destructive" : ""}`}>
+              {formatINR(workflowTotals?.outstanding ?? due)}
+            </p>
+          </div>
+        </div>
+      </DialogHeader>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+        <div className="mb-4">
+          <ToggleGroup
+            type="single"
+            value={section}
+            onValueChange={(value) => {
+              if (value === "installments" || value === "payments" || value === "followUp")
+                setSection(value);
+            }}
+            aria-label="Bill details sections"
+            className="grid w-full grid-cols-3"
           >
-            <Bell className="mr-1 h-4 w-4" />
-            Send reminder
-          </Button>
+            <ToggleGroupItem value="installments" className="w-full">Installments</ToggleGroupItem>
+            <ToggleGroupItem value="payments" className="w-full">Payments</ToggleGroupItem>
+            <ToggleGroupItem value="followUp" className="w-full">Follow-up</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
+        {section === "installments" && (
+          <div className="space-y-3">
+            <div className="w-full overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Installment</TableHead>
+                    <TableHead>Due date</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead className="text-right">Paid</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Days overdue</TableHead>
+                    <TableHead>Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {planRows.map((row) => {
+                    const actionLabel =
+                      row.followUp === "In-Person Follow-Up Required"
+                        ? "Add meeting note"
+                        : row.canRemind
+                          ? "Send reminder"
+                          : row.outstanding > 0 && workflowPerson
+                            ? "Record payment"
+                            : null;
+                    return (
+                      <TableRow key={row.id}>
+                        <TableCell className="font-medium">{row.label}</TableCell>
+                        <TableCell className="whitespace-nowrap">{formatDate(row.dueDate)}</TableCell>
+                        <TableCell className="num whitespace-nowrap text-right">{formatINR(row.amount)}</TableCell>
+                        <TableCell className="num whitespace-nowrap text-right">{formatINR(row.paid)}</TableCell>
+                        <TableCell>
+                          {row.status.startsWith("Overdue ") ? (
+                            <span className="inline-flex whitespace-nowrap rounded-full border border-destructive/30 bg-danger-soft px-2.5 py-0.5 text-xs font-medium text-destructive">
+                              {row.status}
+                            </span>
+                          ) : (
+                            <StatusBadge status={row.status} />
+                          )}
+                        </TableCell>
+                        <TableCell className="num whitespace-nowrap text-right">
+                          {row.daysOverdue || "—"}
+                        </TableCell>
+                        <TableCell>
+                          {actionLabel && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleInstallmentAction(row)}
+                            >
+                              {actionLabel}
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+            {canRemind && !student.phone.trim() && (
+              <p className="text-xs text-muted-foreground">A phone number is needed to send a reminder.</p>
+            )}
+          </div>
         )}
-      </div>
-      {canRemind && !student.phone.trim() && (
-        <p className="text-xs text-muted-foreground">
-          A phone number is needed to send a reminder.
-        </p>
-      )}
-      <p className="text-muted-foreground">
-        {ADMISSION_NO_FULL} {student.regNo ? student.regNo : <StatusBadge status="Pending" />} ·{" "}
-        {studentDepartment(student, courseCatalog)} · {course?.name ?? student.course}
-        {student.track ? ` · ${student.track}` : ""}
-        {student.duration ? ` · ${formatCourseDuration(student.duration)}` : ""}
-      </p>
-      <StatGrid className="mb-4">
-        <StatCard label="Billed amount" value={formatINR(student.totalFee)} caption="Total fee" />
-        <StatCard
-          label="Recorded payments"
-          value={formatINR(paid)}
-          tone="success"
-          caption="Collected so far"
-        />
-        <StatCard
-          label="Remaining"
-          value={formatINR(Math.max(0, student.totalFee - paid))}
-          tone={student.totalFee - paid > 0 ? "danger" : "success"}
-          caption="Billed − recorded payments"
-        />
-      </StatGrid>
-      <div>
-        <h3 className="mb-2 font-semibold">Installment schedule</h3>
-        <ScheduleTable student={student} />
-      </div>
-      <div ref={paymentsSectionRef}>
-        <h3 className="mb-2 font-semibold">Recorded payments</h3>
+        {section === "payments" && (
+          <div className="space-y-3">
+            <h3 className="font-semibold">Recorded payments</h3>
         {mine.length === 0 ? (
           <EmptyState message="No payments recorded yet." />
         ) : (
@@ -1775,33 +1867,208 @@ export function BillDetails({
             </Table>
           </div>
         )}
-      </div>
-      <div>
-        <h3 className="mb-2 font-semibold">Reminder history</h3>
-        {history.length === 0 ? (
-          <EmptyState message="No reminders logged yet." />
-        ) : (
-          <ul className="space-y-2">
-            {history.map((item) => (
-              <li
-                key={item.id}
-                className="flex flex-wrap justify-between gap-x-4 rounded-md border p-2 text-xs"
-              >
-                <span>
-                  {formatReminderDateTime(item.sentAt)} · {item.email || item.phone}
-                </span>
-                <span className="num">{formatINR(item.amountDue)}</span>
-              </li>
-            ))}
-          </ul>
+          </div>
+        )}
+        {section === "followUp" && (
+          <div className="space-y-5">
+            <section className="space-y-2">
+              <h3 className="font-semibold">Reminder history</h3>
+              {workflowPerson && workflowPerson.plan.some((item) => item.reminders.length > 0) ? (
+                <ul className="space-y-2">
+                  {workflowPerson.plan.flatMap((installment) =>
+                    installment.reminders.map((item, index) => (
+                      <li
+                        key={item.id ?? `${installment.id}-${item.date}-${index}`}
+                        className="flex flex-wrap justify-between gap-2 rounded-md border p-2 text-xs"
+                      >
+                        <span>
+                          {formatReminderDateTime(item.date)} · {installment.label} · {item.text}
+                        </span>
+                        <span>{workflowPerson.email || "No email recorded"}</span>
+                      </li>
+                    )),
+                  )}
+                </ul>
+              ) : history.length > 0 ? (
+                <ul className="space-y-2">
+                  {history.map((item) => (
+                    <li
+                      key={item.id}
+                      className="flex flex-wrap justify-between gap-x-4 rounded-md border p-2 text-xs"
+                    >
+                      <span>{formatReminderDateTime(item.sentAt)} · {item.email || item.phone}</span>
+                      <span className="num">{formatINR(item.amountDue)}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <EmptyState message="No reminders logged yet." />
+              )}
+            </section>
+            <section className="space-y-2 rounded-lg border p-3">
+              <h3 className="font-semibold">Class Access</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge status={classAccessStatus} />
+                {classAccessStatus === "On Hold" && (
+                  <span className="text-xs text-muted-foreground">
+                    Simulated; LMS enforcement needs a future integration.
+                  </span>
+                )}
+                {classAccessStatus === "Payment Cleared" && (
+                  <span className="text-xs text-muted-foreground">
+                    Simulated; LMS enforcement needs a future integration.
+                  </span>
+                )}
+              </div>
+            </section>
+            {workflowPerson?.plan.some(
+              (installment) =>
+                installmentFollowUpStatus(installment, workflowPayments) ===
+                "In-Person Follow-Up Required",
+            ) && (
+              <section className="space-y-2 rounded-lg border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-semibold">In-Person Accounts Meeting Required</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Simulated follow-up; no meeting is scheduled externally.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      const target = workflowPerson.plan.find(
+                        (installment) =>
+                          installmentFollowUpStatus(installment, workflowPayments) ===
+                          "In-Person Follow-Up Required",
+                      );
+                      if (target) {
+                        setMeetingNote("");
+                        setMeetingInstallmentId(target.id);
+                      }
+                    }}
+                  >
+                    Add meeting note
+                  </Button>
+                </div>
+              </section>
+            )}
+            {workflowPerson?.plan.some((installment) => installment.meetingNotes.length > 0) && (
+              <section className="space-y-2">
+                <h3 className="font-semibold">Meeting notes</h3>
+                <ul className="space-y-2">
+                  {workflowPerson.plan.flatMap((installment) =>
+                    installment.meetingNotes.map((note, index) => (
+                      <li
+                        key={`${installment.id}-${index}`}
+                        className="rounded-md border p-2 text-xs"
+                      >
+                        <span className="font-medium">{installment.label}: </span>
+                        {note}
+                      </li>
+                    )),
+                  )}
+                </ul>
+              </section>
+            )}
+            {workflowPerson &&
+              classAccessStatus === "Payment Cleared" &&
+              hasUnnotifiedPayments && (
+                <section className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
+                  <div>
+                    <h3 className="font-semibold">Notify Administration</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Payment cleared; notification is simulated.
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={showNotification}>
+                    Notify Administration
+                  </Button>
+                </section>
+              )}
+            {workflowPerson && (
+              <AdministrationHistory personId={workflowPerson.id} handoffs={feeWorkflow.handoffs} />
+            )}
+          </div>
         )}
       </div>
+      <DialogFooter className="shrink-0 border-t px-4 py-3 sm:px-6">
+        <Button variant="outline" onClick={onClose}>Close</Button>
+      </DialogFooter>
       <ReminderPrompt
         open={remind}
         onOpenChange={setRemind}
         rows={[reminderDetails(student, payments)]}
         onDone={() => toast.success("Reminder was logged. Nothing was sent.")}
       />
+      <Dialog open={!!reminderRow} onOpenChange={(open) => !open && setReminderRow(null)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Send fee reminder (simulated)</DialogTitle>
+          </DialogHeader>
+          {workflowPerson && reminderInstallment && reminderEmail && (
+            <div className="space-y-3 text-sm">
+              <p className="rounded-md bg-accent p-3 text-accent-foreground">
+                Simulated, no message sent
+              </p>
+              <p><strong>To:</strong> {reminderEmail.to || "Not provided"}</p>
+              <p><strong>Name:</strong> {workflowPerson.name}</p>
+              <p><strong>Course:</strong> {workflowPerson.course}</p>
+              <p><strong>Installment:</strong> {reminderInstallment.label}</p>
+              <p><strong>Outstanding:</strong> {formatINR(reminderAmount)}</p>
+              <p><strong>Due date:</strong> {formatDate(reminderInstallment.dueDate)}</p>
+              <div className="rounded-md border bg-muted/40 p-3">{reminderEmail.body}</div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReminderRow(null)}>Cancel</Button>
+            <Button onClick={confirmReminder} disabled={!reminderInstallment || reminderAmount <= 0}>
+              Confirm simulated reminder
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={!!meetingInstallmentId}
+        onOpenChange={(open) => !open && setMeetingInstallmentId(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>In-Person Accounts Meeting Required</DialogTitle>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveMeetingNote();
+            }}
+            onKeyDown={onMeetingEnterKeyDown}
+          >
+            {workflowPerson && meetingInstallment && (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Demo follow-up for {workflowPerson.name} · {meetingInstallment.label}. No meeting
+                  is scheduled externally.
+                </p>
+                <Field label="Demo follow-up note" htmlFor="bill-meeting-note">
+                  <Input
+                    id="bill-meeting-note"
+                    value={meetingNote}
+                    onChange={(event) => setMeetingNote(event.target.value)}
+                    placeholder="Add a note for Accounts"
+                  />
+                </Field>
+              </div>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setMeetingInstallmentId(null)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={!meetingNote.trim()}>Save demo note</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
       <Dialog open={!!receipt} onOpenChange={(open) => !open && setReceipt(null)}>
         <DialogContent className="z-[60] flex max-h-[90vh] w-[calc(100vw-2rem)] max-w-[900px] flex-col gap-0 overflow-hidden p-0">
           <DialogHeader className="shrink-0 border-b p-6 pr-14">
@@ -1835,44 +2102,6 @@ export function BillDetails({
           )}
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-function ScheduleTable({ student }: { student: Student }) {
-  const { payments } = useFinance();
-  return (
-    <div className="w-full overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Installment</TableHead>
-            <TableHead>Due date</TableHead>
-            <TableHead className="text-right">Amount</TableHead>
-            <TableHead className="text-right">Paid</TableHead>
-            <TableHead>Status</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {installmentSchedule(student, studentPaid(student.id, payments), TODAY, payments).map(
-            (i) => (
-              <TableRow key={i.label}>
-                <TableCell>{i.label}</TableCell>
-                <TableCell className="whitespace-nowrap">{formatDate(i.due)}</TableCell>
-                <TableCell className="num whitespace-nowrap text-right">
-                  {formatINR(i.amount)}
-                </TableCell>
-                <TableCell className="num whitespace-nowrap text-right">
-                  {formatINR(i.paid)}
-                </TableCell>
-                <TableCell>
-                  <StatusBadge status={i.status} />
-                </TableCell>
-              </TableRow>
-            ),
-          )}
-        </TableBody>
-      </Table>
     </div>
   );
 }
@@ -2113,8 +2342,15 @@ function BillField({
   );
 }
 
-function CreateBill({ onClose }: { onClose: () => void }) {
-  const { courseCatalog, addStudent } = useFinance();
+function CreateBill({
+  initialStudent,
+  onClose,
+}: {
+  initialStudent?: Student;
+  onClose: () => void;
+}) {
+  const { courseCatalog, feeWorkflow, addStudent } = useFinance();
+  const { open: openRecordPayment } = useRecordPayment();
   const empty = {
     name: "",
     applicationId: "",
@@ -2127,10 +2363,39 @@ function CreateBill({ onClose }: { onClose: () => void }) {
     phone: "",
     email: "",
     batch: "",
+    admissionNo: "",
   };
-  const [f, setF] = useState(empty);
+  const initialCourse = initialStudent
+    ? courseCatalog.courses.find(
+        (course) => course.id === initialStudent.courseId || course.name === initialStudent.course,
+      )
+    : undefined;
+  const [f, setF] = useState(() =>
+    initialStudent
+      ? {
+          ...empty,
+          name: initialStudent.name,
+          applicationId: initialStudent.applicationId ?? "",
+          admissionNo: initialStudent.regNo,
+          department: initialStudent.department ?? initialCourse?.department ?? "",
+          courseId: initialCourse?.id ?? "",
+          track: initialStudent.track ?? "Fast Track",
+          fee: String(initialCourse?.fee ?? initialStudent.totalFee),
+          count: String(initialStudent.installments.length || 3),
+          firstDue: initialStudent.installments[0]?.due ?? empty.firstDue,
+          phone: initialStudent.phone,
+          email: initialStudent.email ?? "",
+          batch: initialStudent.batch ?? "",
+        }
+      : empty,
+  );
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [confirmClose, setConfirmClose] = useState(false);
+  const [createdBill, setCreatedBill] = useState<{
+    personId: string;
+    studentName: string;
+    firstAmount: number;
+  } | null>(null);
   const submitting = useRef(false);
   const onEnterKeyDown = useEnterToNext();
   const set = (k: keyof typeof f) => (v: string) => setF((x) => ({ ...x, [k]: v }));
@@ -2176,7 +2441,7 @@ function CreateBill({ onClose }: { onClose: () => void }) {
       return;
     }
     submitting.current = true;
-    addStudent({
+    const student = addStudent({
       name: f.name.trim(),
       applicationId: f.applicationId.trim() || undefined,
       regNo: "",
@@ -2192,16 +2457,38 @@ function CreateBill({ onClose }: { onClose: () => void }) {
       totalFee: fee,
       installments: preview,
     });
+    setCreatedBill({
+      personId: workflowPersonForStudent(student, feeWorkflow.persons)?.id ?? student.id,
+      studentName: student.name,
+      firstAmount: preview[0]?.amount ?? 0,
+    });
     toast.success(`Bill created for ${f.name.trim()}`);
-    onClose();
   };
   return (
     <>
       <Dialog open onOpenChange={(o) => !o && requestClose()}>
         <DialogContent className="flex max-h-[95vh] w-[90vw] max-w-[960px] flex-col gap-0 p-0 sm:max-w-[960px]">
           <DialogHeader className="px-6 pb-2 pt-5">
-            <DialogTitle>Create student bill</DialogTitle>
+            <DialogTitle>{createdBill ? "Bill created" : "Create student bill"}</DialogTitle>
           </DialogHeader>
+          {createdBill ? (
+            <div className="space-y-4 px-6 pb-6">
+              <p className="text-sm text-muted-foreground">
+                The bill for {createdBill.studentName} was created successfully.
+              </p>
+              <DialogFooter>
+                <Button variant="outline" onClick={onClose}>Close</Button>
+                <Button
+                  onClick={() => {
+                    openRecordPayment(createdBill.personId, createdBill.firstAmount);
+                    onClose();
+                  }}
+                >
+                  Record payment
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : (
           <form
             className="flex min-h-0 flex-1 flex-col"
             onSubmit={(event) => {
@@ -2317,13 +2604,15 @@ function CreateBill({ onClose }: { onClose: () => void }) {
                   <Input
                     id="b-application-id"
                     value={f.applicationId}
-                    onChange={(ev) => set("applicationId")(ev.target.value)}
+                    readOnly
+                    tabIndex={-1}
+                    className="bg-muted"
                     placeholder="APP2026-###"
                   />
                 </BillField>
                 <BillField label={ADMISSION_NO_FULL}>
                   <Input
-                    value="Pending — received from Administration"
+                    value={f.admissionNo || "Pending — received from Administration"}
                     readOnly
                     tabIndex={-1}
                     className="bg-muted"
@@ -2418,16 +2707,17 @@ function CreateBill({ onClose }: { onClose: () => void }) {
               </Button>
             </DialogFooter>
           </form>
+          )}
         </DialogContent>
       </Dialog>
-      <ConfirmDialog
+      {!createdBill && <ConfirmDialog
         open={confirmClose}
         onOpenChange={setConfirmClose}
         title="Discard this bill?"
         description="The details you entered will be lost."
         confirmLabel="Discard"
         onConfirm={onClose}
-      />
+      />}
     </>
   );
 }
@@ -2507,468 +2797,5 @@ function PaymentNotificationDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function Installments() {
-  const { workflowAction, workflowActionPersonId, workflowActionInstallmentId } = Route.useSearch();
-  const navigate = Route.useNavigate();
-  const { open: openRecordPayment } = useRecordPayment();
-  const { feeWorkflow, saveFeeWorkflowHandoff, logInstallmentReminder, addInstallmentMeetingNote } =
-    useFinance();
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("all");
-  const [followUp, setFollowUp] = useState("all");
-  const [reminderRow, setReminderRow] = useState<{
-    personId: string;
-    installmentId: string;
-    requestId: string;
-  } | null>(null);
-  const [meetingRow, setMeetingRow] = useState<{ personId: string; installmentId: string } | null>(
-    null,
-  );
-  const [meetingNote, setMeetingNote] = useState("");
-  const onMeetingEnterKeyDown = useEnterToNext();
-  const [notifyPersonId, setNotifyPersonId] = useState<string | null>(null);
-  useEffect(() => {
-    if (!workflowAction || !workflowActionPersonId || !workflowActionInstallmentId) return;
-    const person = feeWorkflow.persons.find((item) => item.id === workflowActionPersonId);
-    const installment = person?.plan.find((item) => item.id === workflowActionInstallmentId);
-    if (!person || !installment) return;
-    if (workflowAction === "reminder") {
-      setReminderRow({
-        personId: person.id,
-        installmentId: installment.id,
-        requestId: `REM-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      });
-    } else if (workflowAction === "meeting") {
-      setMeetingRow({ personId: person.id, installmentId: installment.id });
-    }
-    navigate({ search: { tab: "installments" } });
-  }, [
-    feeWorkflow.persons,
-    navigate,
-    workflowAction,
-    workflowActionInstallmentId,
-    workflowActionPersonId,
-  ]);
-  const reminderRequest = reminderRow
-    ? feeWorkflow.persons
-        .find((person) => person.id === reminderRow.personId)
-        ?.plan.find((installment) => installment.id === reminderRow.installmentId)
-    : undefined;
-  const reminderPerson = reminderRow
-    ? feeWorkflow.persons.find((person) => person.id === reminderRow.personId)
-    : undefined;
-  const reminderPayments = reminderPerson
-    ? feeWorkflow.payments.filter((payment) => payment.personId === reminderPerson.id)
-    : [];
-  const reminderAmount = reminderRequest
-    ? installmentOutstanding(reminderRequest, reminderPayments)
-    : 0;
-  const reminderEmail =
-    reminderPerson && reminderRequest
-      ? buildPaymentReminderEmail(
-          { name: reminderPerson.name, email: reminderPerson.email, course: reminderPerson.course },
-          reminderRequest.label,
-          reminderAmount,
-          reminderRequest.dueDate,
-          "Finance & Accounts",
-        )
-      : null;
-  const notifyPerson = feeWorkflow.persons.find((person) => person.id === notifyPersonId);
-  const notificationPayload = notifyPerson
-    ? buildPaymentNotificationPayload(notifyPerson, feeWorkflow.payments)
-    : null;
-  const rows = feeWorkflow.persons.flatMap((person) => {
-    const payments = feeWorkflow.payments.filter((payment) => payment.personId === person.id);
-    return person.plan
-      .filter(
-        (installment) =>
-          installmentOutstanding(installment, payments) > 0 ||
-          isRecentlyPaidInstallment(installment, payments),
-      )
-      .map((installment) => {
-        const outstanding = installmentOutstanding(installment, payments);
-        return {
-          person,
-          installment,
-          payments,
-          paid: installmentPaid(installment.id, payments),
-          outstanding,
-          status: installmentStatus(installment, payments),
-          daysOverdue: outstanding > 0 ? installmentDaysOverdue(installment) : 0,
-          followUp: installmentFollowUpStatus(installment, payments),
-          classAccess: classAccess(person, payments),
-        };
-      });
-  });
-  const dueThisWeek = sum(
-    rows
-      .filter(
-        (row) =>
-          row.outstanding > 0 &&
-          row.installment.dueDate >= TODAY &&
-          row.followUp === "Reminder Due",
-      )
-      .map((row) => row.outstanding),
-  );
-  const overdueAmount = sum(
-    rows.filter((row) => row.status === "Overdue").map((row) => row.outstanding),
-  );
-  const remindersSent = feeWorkflow.persons.reduce(
-    (total, person) =>
-      total + person.plan.reduce((count, installment) => count + installment.reminders.length, 0),
-    0,
-  );
-  const inPersonPeople = new Set(
-    rows
-      .filter((row) => row.followUp === "In-Person Follow-Up Required")
-      .map((row) => row.person.id),
-  );
-  const search = query.trim().toLowerCase();
-  const filteredRows = rows
-    .filter(
-      (row) =>
-        (!search ||
-          `${row.person.name} ${row.person.applicationId} ${row.person.admissionNo ?? ""} ${row.installment.label}`
-            .toLowerCase()
-            .includes(search)) &&
-        (status === "all" || row.status === status) &&
-        (followUp === "all" || row.followUp === followUp),
-    )
-    .sort((left, right) => left.installment.dueDate.localeCompare(right.installment.dueDate));
-  const confirmReminder = () => {
-    if (!reminderRow || !reminderPerson || !reminderRequest || reminderAmount <= 0) {
-      toast.error("This installment no longer has an outstanding balance.");
-      setReminderRow(null);
-      return;
-    }
-    if (
-      reminderRequest.reminders.some((reminder) => reminder.id === reminderRow.requestId) ||
-      reminderRequest.reminders.length >= MAX_REMINDERS
-    ) {
-      toast.error("This reminder has already been recorded or the reminder limit was reached.");
-      setReminderRow(null);
-      return;
-    }
-    logInstallmentReminder(reminderPerson.id, reminderRequest.id, {
-      id: reminderRow.requestId,
-      date: new Date().toISOString(),
-      text: "Reminder sent (simulated)",
-    });
-    setReminderRow(null);
-    toast.success("Reminder logged (simulated). No message was sent.");
-  };
-  const confirmPaymentNotification = () => {
-    if (!notifyPerson || !notificationPayload?.payments.length) {
-      toast.error("There are no unnotified payments to report.");
-      setNotifyPersonId(null);
-      return;
-    }
-    const existing = feeWorkflow.handoffs.find(
-      (handoff) => handoff.personId === notifyPerson.id && handoff.target === "Administration",
-    );
-    const sentAt = new Date().toISOString();
-    saveFeeWorkflowHandoff({
-      personId: notifyPerson.id,
-      target: "Administration",
-      status: existing?.status ?? "Completed",
-      history: notificationPayload.payments.map((payment) => ({
-        date: sentAt,
-        text: ADMINISTRATION_PAYMENT_NOTIFIED_TEXT,
-        referenceId: payment.id,
-        paymentNotification: {
-          date: payment.date,
-          amount: payment.amount,
-          installmentsCovered: payment.installmentsCovered,
-          remainingBalance: payment.remainingBalance,
-        },
-      })),
-    });
-    setNotifyPersonId(null);
-    toast.success("Administration notified (simulated)");
-  };
-  const meetingPerson = feeWorkflow.persons.find((person) => person.id === meetingRow?.personId);
-  const meetingInstallment = meetingPerson?.plan.find(
-    (installment) => installment.id === meetingRow?.installmentId,
-  );
-  const saveMeetingNote = () => {
-    if (!meetingPerson || !meetingInstallment || !meetingNote.trim()) return;
-    addInstallmentMeetingNote(
-      meetingPerson.id,
-      meetingInstallment.id,
-      `${new Date().toISOString()} — ${meetingNote.trim()}`,
-    );
-    setMeetingNote("");
-    setMeetingRow(null);
-    toast.success("Demo meeting follow-up note saved.");
-  };
-  return (
-    <div className="space-y-4">
-      <p className="rounded-lg bg-accent px-3.5 py-2 text-xs text-accent-foreground">
-        Reminders, Administration notifications, and class access are simulated. No message is sent
-        and the LMS is not changed; LMS enforcement needs a future integration.
-      </p>
-      <StatGrid>
-        <StatCard label="Overdue amount" value={formatINR(overdueAmount)} tone="danger" />
-        <StatCard label="Due this week" value={formatINR(dueThisWeek)} />
-        <StatCard label="Reminders sent" value={String(remindersSent)} />
-        <StatCard label="In-person follow-up" value={String(inPersonPeople.size)} />
-      </StatGrid>
-      <SectionCard>
-        <FilterBar>
-          <SearchBox
-            value={query}
-            onChange={setQuery}
-            placeholder="Search person, ID or installment"
-          />
-          <FilterSelect
-            label="Status"
-            value={status}
-            onChange={setStatus}
-            options={["Pending", "Partially Paid", "Paid", "Overdue"]}
-          />
-          <FilterSelect
-            label="Follow-up"
-            value={followUp}
-            onChange={setFollowUp}
-            options={["Reminder Due", "Reminder Sent", "In-Person Follow-Up Required"]}
-          />
-        </FilterBar>
-        {filteredRows.length === 0 ? (
-          <EmptyState />
-        ) : (
-          <div className="w-full overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Person</TableHead>
-                  <TableHead>Installment</TableHead>
-                  <TableHead className="text-right">Payable</TableHead>
-                  <TableHead className="text-right">Paid</TableHead>
-                  <TableHead className="text-right">Outstanding</TableHead>
-                  <TableHead>Due date</TableHead>
-                  <TableHead className="text-right">Days overdue</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Follow-up</TableHead>
-                  <TableHead>Class access</TableHead>
-                  <TableHead>Action</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredRows.map((row) => {
-                  const isReminderActionAvailable =
-                    row.outstanding > 0 &&
-                    row.followUp !== "In-Person Follow-Up Required" &&
-                    row.installment.reminders.length < MAX_REMINDERS;
-                  const notificationAvailable =
-                    !!row.person.admissionNo &&
-                    row.classAccess === "Payment Cleared" &&
-                    feeWorkflow.payments.some(
-                      (payment) => payment.personId === row.person.id && !payment.adminNotified,
-                    );
-                  const identifier = row.person.admissionNo ?? row.person.applicationId;
-                  return (
-                    <TableRow key={`${row.person.id}-${row.installment.id}`}>
-                      <TableCell className="min-w-40">
-                        <span className="font-medium">{row.person.name}</span>
-                        <span className="block whitespace-nowrap text-xs text-muted-foreground">
-                          {identifier}
-                        </span>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">{row.installment.label}</TableCell>
-                      <TableCell className="num whitespace-nowrap text-right">
-                        {formatINR(row.installment.amountDue)}
-                      </TableCell>
-                      <TableCell className="num whitespace-nowrap text-right">
-                        {formatINR(row.paid)}
-                      </TableCell>
-                      <TableCell
-                        className={`num whitespace-nowrap text-right ${row.outstanding > 0 ? "font-medium text-destructive" : ""}`}
-                      >
-                        {formatINR(row.outstanding)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {formatDate(row.installment.dueDate)}
-                      </TableCell>
-                      <TableCell className="num whitespace-nowrap text-right">
-                        {row.daysOverdue || "—"}
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={row.status} />
-                      </TableCell>
-                      <TableCell className="min-w-48">
-                        {row.followUp ? <StatusBadge status={row.followUp} /> : "—"}
-                        {row.followUp === "In-Person Follow-Up Required" && (
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            In-Person Accounts Meeting Required
-                          </p>
-                        )}
-                      </TableCell>
-                      <TableCell className="min-w-40">
-                        {row.classAccess && (
-                          <>
-                            <StatusBadge status={row.classAccess} />
-                            {row.classAccess === "On Hold" && (
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                LMS enforcement needs a future integration.
-                              </p>
-                            )}
-                          </>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex min-w-max gap-1">
-                          {row.outstanding > 0 && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => openRecordPayment(row.person.id)}
-                            >
-                              Record payment
-                            </Button>
-                          )}
-                          {isReminderActionAvailable && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() =>
-                                setReminderRow({
-                                  personId: row.person.id,
-                                  installmentId: row.installment.id,
-                                  requestId: `REM-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                                })
-                              }
-                            >
-                              Send reminder
-                            </Button>
-                          )}
-                          {row.followUp === "In-Person Follow-Up Required" && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => {
-                                setMeetingRow({
-                                  personId: row.person.id,
-                                  installmentId: row.installment.id,
-                                });
-                                setMeetingNote("");
-                              }}
-                            >
-                              Add meeting note
-                            </Button>
-                          )}
-                          {notificationAvailable && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => setNotifyPersonId(row.person.id)}
-                            >
-                              Notify Administration
-                            </Button>
-                          )}
-                        </div>
-                        {row.installment.meetingNotes.length > 0 && (
-                          <p className="mt-1 max-w-64 text-xs text-muted-foreground">
-                            {row.installment.meetingNotes.at(-1)}
-                          </p>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </SectionCard>
-      <Dialog open={!!reminderRow} onOpenChange={(open) => !open && setReminderRow(null)}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Send fee reminder (simulated)</DialogTitle>
-          </DialogHeader>
-          {reminderPerson && reminderRequest && reminderEmail && (
-            <div className="space-y-3 text-sm">
-              <p className="rounded-md bg-accent p-3 text-accent-foreground">
-                Simulated, no message sent
-              </p>
-              <p>
-                <strong>To:</strong> {reminderEmail.to || "Not provided"}
-              </p>
-              <p>
-                <strong>Name:</strong> {reminderPerson.name}
-              </p>
-              <p>
-                <strong>Course:</strong> {reminderPerson.course}
-              </p>
-              <p>
-                <strong>Installment:</strong> {reminderRequest.label}
-              </p>
-              <p>
-                <strong>Outstanding:</strong> {formatINR(reminderAmount)}
-              </p>
-              <p>
-                <strong>Due date:</strong> {formatDate(reminderRequest.dueDate)}
-              </p>
-              <div className="rounded-md border bg-muted/40 p-3">{reminderEmail.body}</div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setReminderRow(null)}>
-              Cancel
-            </Button>
-            <Button onClick={confirmReminder} disabled={!reminderRequest || reminderAmount <= 0}>
-              Confirm simulated reminder
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={!!meetingRow} onOpenChange={(open) => !open && setMeetingRow(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>In-Person Accounts Meeting Required</DialogTitle>
-          </DialogHeader>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              saveMeetingNote();
-            }}
-            onKeyDown={onMeetingEnterKeyDown}
-          >
-            {meetingPerson && meetingInstallment && (
-              <div className="space-y-3">
-                <p className="text-sm text-muted-foreground">
-                  Demo follow-up for {meetingPerson.name} · {meetingInstallment.label}. No meeting is
-                  scheduled externally.
-                </p>
-                <Field label="Demo follow-up note" htmlFor="meeting-note">
-                  <Input
-                    id="meeting-note"
-                    value={meetingNote}
-                    onChange={(event) => setMeetingNote(event.target.value)}
-                    placeholder="Add a note for Accounts"
-                  />
-                </Field>
-              </div>
-            )}
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setMeetingRow(null)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={!meetingNote.trim()}>
-                Save demo note
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-      <PaymentNotificationDialog
-        open={!!notifyPersonId}
-        payload={notificationPayload}
-        onOpenChange={(open) => !open && setNotifyPersonId(null)}
-        onConfirm={confirmPaymentNotification}
-      />
-    </div>
   );
 }

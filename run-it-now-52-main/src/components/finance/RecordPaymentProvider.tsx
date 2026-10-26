@@ -52,7 +52,8 @@ import { useEnterToNext } from "@/hooks/use-enter-to-next";
 export function RecordPaymentProvider({ children }: { children: ReactNode }) {
   const { feeWorkflow } = useFinance();
   const [personId, setPersonId] = useState<string | null | undefined>(null);
-  const open = (requestedPersonId?: string) => {
+  const [initialAmount, setInitialAmount] = useState<number | undefined>();
+  const open = (requestedPersonId?: string, requestedAmount?: number) => {
     if (
       requestedPersonId &&
       !feeWorkflow.persons.some((person) => person.id === requestedPersonId)
@@ -60,24 +61,35 @@ export function RecordPaymentProvider({ children }: { children: ReactNode }) {
       toast.error("Select a person before recording payment.");
       return;
     }
+    setInitialAmount(requestedAmount);
     setPersonId(requestedPersonId);
   };
-  const close = () => setPersonId(null);
+  const close = () => {
+    setPersonId(null);
+    setInitialAmount(undefined);
+  };
 
   return (
     <RecordPaymentContext.Provider value={{ open }}>
       {children}
-      <RecordPaymentDialog personId={personId} onSelectPerson={setPersonId} onClose={close} />
+      <RecordPaymentDialog
+        personId={personId}
+        initialAmount={initialAmount}
+        onSelectPerson={setPersonId}
+        onClose={close}
+      />
     </RecordPaymentContext.Provider>
   );
 }
 
 function RecordPaymentDialog({
   personId,
+  initialAmount,
   onSelectPerson,
   onClose,
 }: {
   personId: string | null | undefined;
+  initialAmount?: number;
   onSelectPerson: (personId: string) => void;
   onClose: () => void;
 }) {
@@ -122,13 +134,13 @@ function RecordPaymentDialog({
   const payments = feeWorkflow.payments.filter((payment) => payment.personId === personId);
   const totals = person ? personTotals(person, payments) : null;
   useEffect(() => {
-    setForm({ amount: "", date: TODAY, method: "", reference: "", target: "auto" });
+    setForm({ amount: initialAmount ? String(initialAmount) : "", date: TODAY, method: "", reference: "", target: "auto" });
     setReceipt(null);
     setSendDetailsPrompt(false);
     setSendPreviewOpen(false);
     setConfirm(false);
     setError("");
-  }, [personId]);
+  }, [initialAmount, personId]);
   const amount = Number(form.amount) || 0;
   const preview =
     person && totals && amount > 0 && amount <= totals.outstanding

@@ -1,6 +1,6 @@
 import { createContext, useContext } from "react";
 
-type RecordPaymentContextValue = { open: (personId?: string) => void };
+type RecordPaymentContextValue = { open: (personId?: string, initialAmount?: number) => void };
 
 export const RecordPaymentContext = createContext<RecordPaymentContextValue | null>(null);
 

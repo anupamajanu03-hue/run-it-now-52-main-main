@@ -158,7 +158,7 @@ function Dashboard() {
               </ul>
             )}
           </SectionCard>
-          <SectionCard title="Overdue fees" action={<Link to="/fees" search={{ tab: "installments" }} className="text-xs text-primary">View</Link>} className="h-full p-4">
+          <SectionCard title="Overdue fees" action={<Link to="/fees" search={{ tab: "billing", todayFilter: "overdue" }} className="text-xs text-primary">View</Link>} className="h-full p-4">
             <p className="num text-lg font-semibold text-destructive">{formatINR(sum(overdue.map((s) => outstanding(s, payments))))}</p>
             <p className="text-xs text-muted-foreground">{overdue.length} students with overdue installments</p>
           </SectionCard>
@@ -184,7 +184,7 @@ function Dashboard() {
               </li>
             ))}</ul>}
         </SectionCard>
-        <SectionCard title="Upcoming dues" action={<Link to="/fees" search={{ tab: "installments" }} className="text-xs text-primary">Installments</Link>}>
+        <SectionCard title="Upcoming dues" action={<Link to="/fees" search={{ tab: "billing", todayFilter: "dueSoon" }} className="text-xs text-primary">Due soon</Link>}>
           {upcoming.length === 0
             ? <p className="text-sm text-muted-foreground">No installments due in the next 7 days.</p>
             : <>

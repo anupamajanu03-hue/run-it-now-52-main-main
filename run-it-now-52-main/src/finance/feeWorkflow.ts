@@ -11,6 +11,7 @@ import type {
   Student,
   StudentApplicationDetails,
 } from "./types";
+import { canonicalAdmissionNo, normalizeAdmissionNo } from "./billing";
 import {
   ADMINISTRATION_DETAILS_SENT_TEXT,
   ADMINISTRATION_PAYMENT_NOTIFIED_TEXT,
@@ -125,17 +126,19 @@ export function validateAdmissionNo(
   persons: Person[],
   students: Student[],
 ): "valid" | "invalid" | "duplicate" {
-  const normalized = admissionNo.trim();
-  if (!/^ADM2026-\d{3}$/.test(normalized)) return "invalid";
+  const normalized = normalizeAdmissionNo(admissionNo);
+  if (!/^ADM2026\d{4}$/.test(normalized)) return "invalid";
+  const canonical = canonicalAdmissionNo(admissionNo);
   const duplicatePerson = persons.some(
     (person) =>
-      person.id !== personId && person.admissionNo?.toLowerCase() === normalized.toLowerCase(),
+      person.id !== personId &&
+      !!person.admissionNo && canonicalAdmissionNo(person.admissionNo) === canonical,
   );
   const duplicateStudent = students.some(
     (student) =>
       student.id !== personId &&
       !!student.regNo &&
-      student.regNo.toLowerCase() === normalized.toLowerCase(),
+      canonicalAdmissionNo(student.regNo) === canonical,
   );
   return duplicatePerson || duplicateStudent ? "duplicate" : "valid";
 }
@@ -550,7 +553,12 @@ export function createDemoFeeWorkflow(
     });
   }
   const admittedApplicants = DEMO_ADMITTED_APPLICATIONS.map((applicant) =>
-    persons.find((person) => person.admissionNo === applicant.admissionNo),
+    persons.find(
+      (person) =>
+        !!person.admissionNo &&
+        canonicalAdmissionNo(person.admissionNo) ===
+          canonicalAdmissionNo(applicant.admissionNo ?? ""),
+    ),
   );
   if (admittedApplicants.some((person) => !person)) {
     throw new Error("Demo admitted applicants must match seeded students.");
@@ -666,24 +674,40 @@ export function buildPaymentConfirmationEmail(
   payment: FeeWorkflowPayment,
   allPayments: FeeWorkflowPayment[],
 ): { to: string; subject: string; body: string } {
+  const emailINR = (amount: number) =>
+    new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 0,
+    }).format(Math.round(amount));
+  const emailDate = (value: string) =>
+    new Intl.DateTimeFormat("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      timeZone: "UTC",
+    }).format(new Date(`${value.slice(0, 10)}T00:00:00Z`));
   const personPayments = allPayments.filter((item) => item.personId === person.id);
   const covered = payment.allocations.map((allocation) => {
     const installment = person.plan.find((item) => item.id === allocation.installmentId);
-    return `${installment?.label ?? "Installment"}: ${inr(allocation.amount)}`;
+    return `Installment ${installment?.label ?? "covered"}: ${emailINR(allocation.amount)}`;
   });
   const totals = personTotals(person, personPayments);
   const nextDue = totals.nextDueInstallment;
   const subject = `Payment confirmation - ${person.name} - ${payment.receiptNo}`;
   const body = [
     `Dear ${person.name},`,
-    `We received ${inr(payment.amount)} by ${payment.method} on ${payment.date}.`,
+    `Amount received: ${emailINR(payment.amount)}. Mode: ${payment.method}. Date: ${emailDate(payment.date)}.`,
     `Receipt no.: ${payment.receiptNo}`,
     `Installment(s) covered: ${covered.join(", ") || "None"}`,
-    `Balance remaining: ${inr(totals.outstanding)}`,
+    `Balance remaining: ${emailINR(totals.outstanding)}`,
     nextDue
-      ? `Next installment due: ${nextDue.label}, ${inr(installmentOutstanding(nextDue, personPayments))} on ${nextDue.dueDate}`
+      ? `Next installment due: Installment ${nextDue.label}, ${emailINR(installmentOutstanding(nextDue, personPayments))} on ${emailDate(nextDue.dueDate)}`
       : "Next installment due: None",
-    person.admissionNo ? `Admission No.: ${person.admissionNo}` : "Admission No.: Pending",
+    person.admissionNo
+      ? `Admission No.: ${person.admissionNo}`
+      : `Application No.: ${person.applicationId}`,
+    "Please keep your printed, signed receipt for your records.",
   ].join("\n");
   return { to: person.email, subject, body };
 }
@@ -705,7 +729,7 @@ export function buildPaymentReminderEmail(
   return {
     to: student.email ?? "",
     subject: `Fee reminder - ${student.name} - ${installment}`,
-    body: `Dear ${student.name}, ${institution} records ${inr(amountDue)} outstanding for ${installment} in ${student.course}, ${dueWording}. Please pay through the institute's accepted payment methods and share the transaction reference with Accounts. This is a simulated reminder; no email was sent.`,
+    body: `Dear ${student.name}, ${institution} records ${inr(amountDue)} outstanding for ${installment} in ${student.course}, ${dueWording}. Please pay through the institute's accepted payment methods and share the transaction reference with Accounts.`,
   };
 }
 
@@ -802,14 +826,20 @@ export function hasDuplicatePaymentReference(
 export function markPaymentConfirmationSent(
   payment: FeeWorkflowPayment,
   sentAt: string,
+  email: { to: string; subject: string; body: string } = { to: "", subject: "", body: "" },
 ): FeeWorkflowPayment {
-  if (payment.confirmation.status === "Sent (simulated)") return payment;
   return {
     ...payment,
     confirmation: { status: "Sent (simulated)", sentAt },
     confirmationHistory: [
       ...(payment.confirmationHistory ?? []),
-      { date: sentAt, text: "Payment confirmation email sent (simulated)" },
+      {
+        date: sentAt,
+        to: email.to,
+        subject: email.subject,
+        body: email.body,
+        status: "Recorded (simulated, no email sent)",
+      },
     ],
   };
 }

@@ -115,7 +115,14 @@ export interface FeeWorkflowPayment {
   allocations: InstallmentAllocation[];
   adminNotified: boolean;
   confirmation: { status: "Not sent" | "Sent (simulated)"; sentAt?: string | undefined };
-  confirmationHistory?: { date: string; text: string }[] | undefined;
+  confirmationHistory?: {
+    date: string;
+    text?: string | undefined;
+    to?: string | undefined;
+    subject?: string | undefined;
+    body?: string | undefined;
+    status?: string | undefined;
+  }[] | undefined;
 }
 
 export type HandoffTarget = "Administration";

@@ -1,4 +1,4 @@
-import { addMonthsISO } from "./billing";
+import { addMonthsISO, canonicalAdmissionNo } from "./billing";
 import { demoDate } from "./demoDates";
 import type {
   ApplicationStatus,
@@ -43,8 +43,8 @@ export const DEMO_FEE_PLANS: Record<string, { label: string; amount: number }[]>
 };
 
 export const DEMO_ADMITTED_APPLICATIONS = [
-  { admissionNo: "ADM2026-104", applicationId: "APP2026-104" },
-  { admissionNo: "ADM2026-105", applicationId: "APP2026-105" },
+  { admissionNo: "ADM-2026-0104", applicationId: "APP2026-104" },
+  { admissionNo: "ADM-2026-0105", applicationId: "APP2026-105" },
 ] as const;
 
 export const DEMO_NEW_APPLICANTS = [
@@ -270,7 +270,7 @@ const scenarioDefinitions: {
     appliedOffset: -30,
     installments: 4,
     status: "Admitted",
-    admissionNo: "ADM2026-118",
+    admissionNo: "ADM-2026-0118",
     dueDateOverrides: { 1: demoDate(4) },
   },
   {
@@ -280,7 +280,7 @@ const scenarioDefinitions: {
     appliedOffset: -60,
     installments: 4,
     status: "Admitted",
-    admissionNo: "ADM2026-119",
+    admissionNo: "ADM-2026-0119",
     dueDateOverrides: { 1: demoDate(-12) },
   },
   {
@@ -290,7 +290,7 @@ const scenarioDefinitions: {
     appliedOffset: -70,
     installments: 4,
     status: "Admitted",
-    admissionNo: "ADM2026-120",
+    admissionNo: "ADM-2026-0120",
     dueDateOverrides: { 1: demoDate(-25) },
   },
   {
@@ -300,7 +300,7 @@ const scenarioDefinitions: {
     appliedOffset: -30,
     installments: 4,
     status: "Admitted",
-    admissionNo: "ADM2026-121",
+    admissionNo: "ADM-2026-0121",
     dueDateOverrides: { 1: demoDate(-10) },
   },
   {
@@ -310,7 +310,7 @@ const scenarioDefinitions: {
     appliedOffset: -8,
     installments: 1,
     status: "Admitted",
-    admissionNo: "ADM2026-122",
+    admissionNo: "ADM-2026-0122",
   },
   {
     id: 129,
@@ -526,13 +526,15 @@ export const DEMO_BILLING_SCENARIO_PERSON_IDS = DEMO_SCENARIO_PEOPLE.slice(3, 11
 );
 
 export function personFromStudent(student: Student, index: number): Person {
+  const admissionNo = student.regNo ? canonicalAdmissionNo(student.regNo) : "";
   const seededApplicant = DEMO_ADMITTED_APPLICATIONS.find(
-    (item) => item.admissionNo === student.regNo,
+    (item) => canonicalAdmissionNo(item.admissionNo) === admissionNo,
   );
+  const admissionSequence = admissionNo.split("-").at(-1)?.replace(/^0+/, "");
   const applicationId =
     student.applicationId ??
     seededApplicant?.applicationId ??
-    `APP2026-${student.regNo.split("-").at(-1) || String(index + 1).padStart(3, "0")}`;
+    `APP2026-${admissionSequence || String(index + 1).padStart(3, "0")}`;
   return {
     id: student.id,
     name: student.name,
@@ -541,7 +543,7 @@ export function personFromStudent(student: Student, index: number): Person {
     course: student.course,
     appliedOn: student.registeredOn,
     applicationId,
-    admissionNo: student.regNo || undefined,
+    admissionNo: admissionNo || undefined,
     applicationStatus: student.regNo ? "Admitted" : "Received",
     admissionStatus: student.regNo ? "Admitted" : "Applicant",
     plan: student.installments.map((installment, installmentIndex) => ({

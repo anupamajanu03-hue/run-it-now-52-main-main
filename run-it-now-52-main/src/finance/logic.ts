@@ -114,6 +114,7 @@ export function settlementStatus(s: Pick<Settlement, "finalized" | "actual" | "r
 
 export type AttentionItem =
   | { key: "overdue"; label: string; value: string }
+  | { key: "feeVerification"; label: string; value: string; requestId: string }
   | { key: "settlements"; label: string; value: string }
   | { key: "petty"; label: string; value: string }
   | { key: "cash"; label: string; value: string }
@@ -126,6 +127,7 @@ export function getNeedsAttention({
   cashBalance,
   bankBalance,
   physicalCount,
+  feeVerificationRequests = [],
 }: {
   students: Student[];
   payments: FeePayment[];
@@ -133,6 +135,7 @@ export function getNeedsAttention({
   cashBalance: number;
   bankBalance: number;
   physicalCount: number | null;
+  feeVerificationRequests?: { requestId: string; examDate: string; needsReply: boolean; hasUnpaid: boolean }[];
 }): AttentionItem[] {
   const installments = students.flatMap((student) =>
     installmentSchedule(student, studentPaid(student.id, payments), TODAY, payments).map((installment) => ({ ...installment, student })),
@@ -141,6 +144,21 @@ export function getNeedsAttention({
   const differences = settlements.filter((settlement) => settlementStatus(settlement) === "Difference Found");
   const cashDifference = physicalCount === null ? null : cashComparison(cashBalance, physicalCount);
   const items: AttentionItem[] = [];
+
+  const examSoonThrough = new Date(`${TODAY}T00:00:00Z`);
+  examSoonThrough.setUTCDate(examSoonThrough.getUTCDate() + 3);
+  const examSoonThroughDate = examSoonThrough.toISOString().slice(0, 10);
+  for (const request of feeVerificationRequests) {
+    const examSoonWithUnpaid = request.examDate >= TODAY && request.examDate <= examSoonThroughDate && request.hasUnpaid;
+    if (request.needsReply || examSoonWithUnpaid) {
+      items.push({
+        key: "feeVerification",
+        requestId: request.requestId,
+        label: `Fee verification · ${request.requestId}`,
+        value: "Open request",
+      });
+    }
+  }
 
   if (overdue.length) {
     items.push({

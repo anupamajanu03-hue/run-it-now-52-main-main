@@ -1,11 +1,17 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { addDays, differenceInCalendarDays } from "date-fns";
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode, type MouseEvent as ReactMouseEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { isValidPhone, monthlyInstallments } from "@/finance/billing";
+import {
+  canonicalAdmissionNo,
+  isValidPhone,
+  monthlyInstallments,
+  normalizeAdmissionNo,
+  verifyFeeForMonth,
+} from "@/finance/billing";
 import { toast } from "sonner";
 import {
   ArrowDown,
@@ -26,6 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -70,6 +77,14 @@ import { AdministrationHistory } from "@/components/finance/AdministrationHistor
 import { ApplicationDetail, ApplicationDetails } from "@/components/finance/ApplicationDetails";
 import { useRecordPayment } from "@/components/finance/RecordPaymentContext";
 import { useFinance } from "@/finance/store";
+import {
+  getFeeVerificationReplyStatus,
+  FEE_VERIFICATION_SOURCE_NOTE,
+  recordFeeVerificationReply,
+  recordFeeVerificationRequestReply,
+  sampleExamRequests,
+  type FeeVerificationRequest,
+} from "@/finance/feeVerificationSim";
 import {
   buildAdministrationDetailsPayload,
   buildPaymentNotificationPayload,
@@ -133,6 +148,7 @@ export const Route = createFileRoute("/fees")({
     workflowActionPersonId?: string;
     workflowActionInstallmentId?: string;
     todayFilter?: "dueSoon" | "overdue" | "meeting";
+    feeVerificationRequestId?: string;
   } => ({
     ...tabSearch(s),
     admissionPersonId: typeof s.admissionPersonId === "string" ? s.admissionPersonId : undefined,
@@ -145,6 +161,7 @@ export const Route = createFileRoute("/fees")({
       typeof s.workflowActionPersonId === "string" ? s.workflowActionPersonId : undefined,
     workflowActionInstallmentId:
       typeof s.workflowActionInstallmentId === "string" ? s.workflowActionInstallmentId : undefined,
+    feeVerificationRequestId: typeof s.feeVerificationRequestId === "string" ? s.feeVerificationRequestId : undefined,
     todayFilter:
       s.todayFilter === "dueSoon" || s.todayFilter === "overdue" || s.todayFilter === "meeting"
         ? s.todayFilter
@@ -187,6 +204,7 @@ export const Route = createFileRoute("/fees")({
 const LABEL: Record<string, string> = {
   applications: "Applications",
   billing: "Billing",
+  feeVerification: "Fee verification",
 };
 const STATUSES = ["Paid", "Partially Paid", "Pending", "Overdue"];
 type BillingSort = {
@@ -230,7 +248,7 @@ function billingStatusLabel(
 }
 
 function FeesPage() {
-  const { tab = "billing" } = Route.useSearch();
+  const { tab = "billing", feeVerificationRequestId } = Route.useSearch();
   const navigate = Route.useNavigate();
   return (
     <>
@@ -242,22 +260,707 @@ function FeesPage() {
         <div className="mb-4 rounded-xl bg-accent px-3.5 py-2 text-xs text-accent-foreground">
           Application forms submitted by students (simulated)
         </div>
-      ) : (
+      ) : tab === "feeVerification" ? null : (
         <SampleNote />
       )}
       <Tabs
-        value={tab === "applications" ? "applications" : "billing"}
+        value={tab === "applications" || tab === "feeVerification" ? tab : "billing"}
         onValueChange={(v) => navigate({ search: { tab: v } })}
         className="mb-4"
       >
         <TabsList className="flex h-auto flex-wrap">
           <TabsTrigger value="applications">Applications</TabsTrigger>
           <TabsTrigger value="billing">Billing</TabsTrigger>
+          <TabsTrigger value="feeVerification">Fee verification</TabsTrigger>
         </TabsList>
       </Tabs>
       {tab === "applications" && <Applications />}
-      {tab !== "applications" && <Billing />}
+      {tab === "billing" && <Billing />}
+      {tab === "feeVerification" && <FeeVerification initialRequestId={feeVerificationRequestId} />}
     </>
+  );
+}
+
+function FeeVerification({ initialRequestId }: { initialRequestId?: string }) {
+  const { students, payments, feeWorkflow, logInstallmentReminder } = useFinance();
+  const { open: openRecordPayment } = useRecordPayment();
+  const [query, setQuery] = useState("");
+  const [courseFilter, setCourseFilter] = useState("all");
+  const [openRequestId, setOpenRequestId] = useState<string | null>(initialRequestId ?? null);
+  const [studentQuery, setStudentQuery] = useState("");
+  const [resultFilter, setResultFilter] = useState("all");
+  const [studentReplyFilter, setStudentReplyFilter] = useState("all");
+  const [, setReplyRevision] = useState(0);
+  const [selectedRequest, setSelectedRequest] = useState<{
+    examRequestId: string;
+    item: FeeVerificationRequest;
+  } | null>(null);
+  const [replyRequest, setReplyRequest] = useState<{ examRequestId: string; item: FeeVerificationRequest } | null>(null);
+  const [replyRemark, setReplyRemark] = useState("");
+  const [reminderView, setReminderView] = useState<{ personId: string; installmentId: string; admissionNo: string; amount: number } | null>(null);
+  const [reminderMessage, setReminderMessage] = useState("");
+  const [reminderError, setReminderError] = useState("");
+  const [bulkReminderIds, setBulkReminderIds] = useState<string[]>([]);
+  const [bulkReminderSummary, setBulkReminderSummary] = useState(false);
+  const [requestReplyOpen, setRequestReplyOpen] = useState(false);
+  const [requestReplyRemark, setRequestReplyRemark] = useState("");
+  const [requestReplyDate, setRequestReplyDate] = useState("");
+  useEffect(() => {
+    if (initialRequestId) setOpenRequestId(initialRequestId);
+  }, [initialRequestId]);
+  const search = query.trim().toLowerCase();
+  const studentSearch = studentQuery.trim().toLowerCase();
+  const normalizedSearch = normalizeAdmissionNo(studentQuery);
+  const verificationPayments = [
+    ...payments,
+    ...feeWorkflow.payments.flatMap((payment) => {
+      const person = feeWorkflow.persons.find((candidate) => candidate.id === payment.personId);
+      const student = person && students.find((candidate) => workflowPersonForStudent(candidate, [person]));
+      return student
+        ? [{
+            id: payment.id,
+            studentId: student.id,
+            date: payment.date,
+            amount: payment.amount,
+            method: payment.method,
+            reference: payment.reference,
+            receiptNo: payment.receiptNo,
+            allocations: payment.allocations,
+          }]
+        : [];
+    }),
+  ];
+  const requests = sampleExamRequests.flatMap((examRequest) =>
+    examRequest.students.map((item) => {
+      const result = verifyFeeForMonth(item, examRequest.feeMonth, students, verificationPayments);
+      return {
+        examRequest,
+        examRequestId: examRequest.examRequestId,
+        feeMonth: examRequest.feeMonth,
+        item,
+        result,
+        replyStatus: getFeeVerificationReplyStatus(item, result),
+      };
+    }),
+  );
+  const requestRows = sampleExamRequests.map((examRequest) => {
+    const items = requests.filter((request) => request.examRequestId === examRequest.examRequestId);
+    const cleared = items.filter(({ result }) => result.status === "Fee Paid").length;
+    const awaiting = items.filter(({ result }) => result.status === "Partially Paid" || result.status === "Fee Payment Pending").length;
+    const needsReview = items.filter(({ result }) => result.status === "Not found").length;
+    const hasReplies = items.some(({ item }) => item.replyStatus === "Replied" || item.replyStatus === "Updated");
+    const hasUnrepliedCleared = items.some(({ item, result }) => result.status === "Fee Paid" && item.replyStatus !== "Replied" && item.replyStatus !== "Updated");
+    const fullyCleared = items.length > 0 && cleared === items.length && items.every(({ item }) => item.replyStatus === "Replied" || item.replyStatus === "Updated");
+    return {
+      examRequest,
+      items,
+      cleared,
+      awaiting,
+      needsReview,
+      reply: fullyCleared ? "Fully cleared" : !hasReplies ? "Not replied" : hasUnrepliedCleared ? "Partly replied" : "Replied",
+    };
+  });
+  const openedRequest = requestRows.find(({ examRequest }) => examRequest.examRequestId === openRequestId);
+  const courses = Array.from(new Set(sampleExamRequests.map((request) => request.course)));
+  const filteredRequestRows = requestRows.filter(
+    ({ examRequest }) =>
+      (courseFilter === "all" || examRequest.course === courseFilter) &&
+      (!search || examRequest.examRequestId.toLowerCase().includes(search) || examRequest.course.toLowerCase().includes(search)),
+  );
+  const filteredStudentRows = (openedRequest?.items ?? []).filter(
+    ({ item, result, replyStatus: status }) =>
+      (!studentSearch || item.name.toLowerCase().includes(studentSearch) || item.admissionNo.toLowerCase().includes(studentSearch) || (!!normalizedSearch && normalizeAdmissionNo(item.admissionNo).includes(normalizedSearch))) &&
+      (resultFilter === "all" || result.status === resultFilter) &&
+      (studentReplyFilter === "all" || status === studentReplyFilter),
+  );
+  const resultSignature = requests
+    .map(({ item, result }) => `${item.id}:${result.status}:${result.paid}:${result.outstanding}`)
+    .join("|");
+  useEffect(() => {
+    let changed = false;
+    for (const examRequest of sampleExamRequests) {
+      if (!examRequest.replies?.length) continue;
+      for (const { item, result, feeMonth } of requests.filter(({ examRequestId }) => examRequestId === examRequest.examRequestId)) {
+        if (result.status !== "Fee Paid" || item.replyStatus === "Replied" || item.replyStatus === "Updated" || !examRequest.replies.some((reply) => reply.awaitingAdmissionNos?.includes(item.admissionNo))) continue;
+        const date = new Date().toISOString();
+        const remark = `Update: now cleared: ${item.admissionNo} ${item.name}`;
+        recordFeeVerificationReply(item, {
+          date,
+          examRequestId: examRequest.examRequestId,
+          admissionNo: item.admissionNo,
+          feeMonth,
+          remark,
+          status: "Recorded (simulated, no message sent)",
+          verifiedPaid: result.paid,
+          verifiedOutstanding: result.outstanding,
+          verifiedStatus: result.status,
+        }, true);
+        recordFeeVerificationRequestReply(examRequest, { date, remark, status: "Recorded (simulated, no message sent)" });
+        changed = true;
+      }
+    }
+    for (const { examRequestId, feeMonth, item, result } of requests) {
+      if (item.replies?.length && (item.replyStatus === "Replied" || item.replyStatus === "Updated")) {
+        const lastReply = item.replies[item.replies.length - 1]!;
+        if (
+          lastReply.verifiedStatus !== result.status ||
+          lastReply.verifiedPaid !== result.paid ||
+          lastReply.verifiedOutstanding !== result.outstanding
+        ) {
+          const date = new Date().toISOString();
+          recordFeeVerificationReply(
+            item,
+            {
+              date,
+              examRequestId,
+              admissionNo: item.admissionNo,
+              feeMonth,
+              remark: `Update: now ${result.status}`,
+              status: "Recorded (simulated, no message sent)",
+              verifiedPaid: result.paid,
+              verifiedOutstanding: result.outstanding,
+              verifiedStatus: result.status,
+            },
+            true,
+          );
+          changed = true;
+        }
+      }
+    }
+    if (changed) setReplyRevision((revision) => revision + 1);
+  }, [resultSignature]);
+  const selected = selectedRequest
+    ? requests.find(
+        ({ examRequestId, item }) =>
+          examRequestId === selectedRequest.examRequestId && item.id === selectedRequest.item.id,
+      )
+    : undefined;
+  const differsFromAdministration =
+    !!selected &&
+    selected.result.status !== "Not found" &&
+    selected.result.outstanding !== selected.item.outstanding;
+  const findStudent = (item: FeeVerificationRequest) =>
+    students.find((student) => normalizeAdmissionNo(student.regNo) === normalizeAdmissionNo(item.admissionNo));
+  const findWorkflowPerson = (item: FeeVerificationRequest) => {
+    const student = findStudent(item);
+    return student ? workflowPersonForStudent(student, feeWorkflow.persons) : undefined;
+  };
+  const openReminder = (item: FeeVerificationRequest, installments: ReturnType<typeof verifyFeeForMonth>["installments"]) => {
+    const student = findStudent(item);
+    if (!student) return;
+    const firstUnpaid = installments.find((installment) => installment.outstanding > 0);
+    const person = workflowPersonForStudent(student, feeWorkflow.persons);
+    const workflowInstallment = firstUnpaid && person?.plan.find((installment) =>
+      installment.label === firstUnpaid.label && installment.dueDate === firstUnpaid.due,
+    );
+    if (workflowInstallment && person) {
+      const draft = buildPaymentReminderEmail({ name: person.name, email: "", course: person.course }, workflowInstallment.label, firstUnpaid.outstanding, workflowInstallment.dueDate, "");
+      setReminderMessage(draft.body);
+      setReminderError("");
+      setReminderView({ personId: person.id, installmentId: workflowInstallment.id, admissionNo: person.admissionNo || item.admissionNo, amount: firstUnpaid?.outstanding ?? 0 });
+    }
+  };
+  const bulkReminderCandidates = (openedRequest?.items ?? []).filter(({ item, result }) => result.status === "Partially Paid" || result.status === "Fee Payment Pending").flatMap(({ item, result }) => {
+    const student = findStudent(item);
+    const person = student && workflowPersonForStudent(student, feeWorkflow.persons);
+    const unpaid = person && result.installments.find((candidate) => candidate.outstanding > 0 && person.plan.some((installment) => installment.label === candidate.label && installment.dueDate === candidate.due && installment.reminders.length < MAX_REMINDERS));
+    const workflowInstallment = unpaid && person?.plan.find((installment) => installment.label === unpaid.label && installment.dueDate === unpaid.due);
+    return person && workflowInstallment && result.outstanding > 0 ? [{ id: item.id, person, installment: workflowInstallment, amount: result.outstanding, admissionNo: item.admissionNo }] : [];
+  });
+  const selectedBulkReminderCandidates = bulkReminderCandidates.filter(({ id }) => bulkReminderIds.includes(id));
+  const sendBulkReminders = () => {
+    let recorded = 0;
+    for (const candidate of selectedBulkReminderCandidates) {
+      if (candidate.installment.reminders.length >= MAX_REMINDERS) continue;
+      const body = buildPaymentReminderEmail({ name: candidate.person.name, email: "", course: candidate.person.course }, candidate.installment.label, candidate.amount, candidate.installment.dueDate, "").body;
+      logInstallmentReminder(candidate.person.id, candidate.installment.id, { id: `LMS-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, date: new Date().toISOString(), text: `Queued for LMS\n${body}` });
+      recorded += 1;
+    }
+    setBulkReminderSummary(false);
+    toast.success(`${recorded} reminder${recorded === 1 ? "" : "s"} Queued for LMS`);
+  };
+  const confirmLmsReminder = () => {
+    if (!reminderMessage.trim()) { setReminderError("Message is required."); return; }
+    const target = reminderView;
+    const person = target && feeWorkflow.persons.find((candidate) => candidate.id === target.personId);
+    const installment = person?.plan.find((candidate) => candidate.id === target?.installmentId);
+    if (!target || !person || !installment || installment.reminders.length >= MAX_REMINDERS) return;
+    logInstallmentReminder(person.id, installment.id, { id: `LMS-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, date: new Date().toISOString(), text: `Queued for LMS\n${reminderMessage}` });
+    setReminderView(null);
+    toast.success("Queued for LMS");
+  };
+  const recordReply = (examRequestId: string, item: FeeVerificationRequest, result: ReturnType<typeof verifyFeeForMonth>, remark: string) => {
+    const date = new Date().toISOString();
+    const examRequest = sampleExamRequests.find((request) => request.examRequestId === examRequestId);
+    if (examRequest) {
+      const awaitingAdmissionNos = requests
+        .filter(({ examRequestId: requestId, result }) => requestId === examRequestId && (result.status === "Partially Paid" || result.status === "Fee Payment Pending"))
+        .map(({ item: candidate }) => candidate.admissionNo);
+      recordFeeVerificationRequestReply(examRequest, { date, remark: remark.trim(), status: "Recorded (simulated, no message sent)", awaitingAdmissionNos });
+    }
+    recordFeeVerificationReply(item, {
+      date,
+      examRequestId,
+      admissionNo: item.admissionNo,
+      feeMonth: requests.find(({ item: candidate }) => candidate.id === item.id)?.feeMonth ?? "",
+      remark: remark.trim(),
+      status: "Recorded (simulated, no message sent)",
+      verifiedPaid: result.paid,
+      verifiedOutstanding: result.outstanding,
+      verifiedStatus: result.status,
+    });
+    toast.success("Recorded (simulated, no message sent)");
+    setReplyRequest(null);
+    setReplyRemark("");
+    setReplyRevision((revision) => revision + 1);
+  };
+  const formatReplyTime = (value: string) => formatReminderDateTime(value);
+  const openRequest = (examRequestId: string, items: typeof requests) => {
+    setBulkReminderIds(items.filter(({ result }) => result.status === "Partially Paid" || result.status === "Fee Payment Pending").map(({ item }) => item.id));
+    setOpenRequestId(examRequestId);
+  };
+  const openStudentDetails = (examRequestId: string, item: FeeVerificationRequest) => setSelectedRequest({ examRequestId, item });
+  const rowClickAllowed = (event: ReactMouseEvent<HTMLTableRowElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, textarea, select, a, [role='checkbox']")) return false;
+    return !window.getSelection()?.toString().trim();
+  };
+  const handleRowKeyDown = (event: ReactKeyboardEvent<HTMLTableRowElement>, open: () => void) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      open();
+    }
+  };
+  const replyToVerified = (items: typeof requests) => {
+    let recorded = 0;
+    const date = new Date().toISOString();
+    const requestIds = new Set<string>();
+    for (const { examRequestId, feeMonth, item, result } of items) {
+      if (result.status !== "Fee Paid" || item.replyStatus === "Replied" || item.replyStatus === "Updated") continue;
+      recordFeeVerificationReply(item, {
+        date,
+        examRequestId,
+        admissionNo: item.admissionNo,
+        feeMonth,
+        remark: "Fee verified as paid.",
+        status: "Recorded (simulated, no message sent)",
+        verifiedPaid: result.paid,
+        verifiedOutstanding: result.outstanding,
+        verifiedStatus: result.status,
+      });
+      requestIds.add(examRequestId);
+      recorded += 1;
+    }
+    if (recorded) {
+      for (const requestId of requestIds) {
+        const request = sampleExamRequests.find((candidate) => candidate.examRequestId === requestId);
+        if (request) {
+          const awaitingAdmissionNos = items
+            .filter(({ examRequestId: candidateId, result }) => candidateId === requestId && (result.status === "Partially Paid" || result.status === "Fee Payment Pending"))
+            .map(({ item }) => item.admissionNo);
+          recordFeeVerificationRequestReply(request, { date, remark: "Fee verified as paid.", status: "Recorded (simulated, no message sent)", awaitingAdmissionNos });
+        }
+      }
+      setReplyRevision((revision) => revision + 1);
+      toast.success("Recorded (simulated, no message sent)");
+    } else {
+      toast.info("There are no verified fee payments to reply to.");
+    }
+  };
+  const startRequestReply = () => {
+    if (!openedRequest) return;
+    const differingNames = openedRequest.items
+      .filter(({ item, result }) => result.status !== "Not found" && result.outstanding !== item.outstanding)
+      .map(({ item }) => item.name);
+    setRequestReplyRemark(differingNames.length ? `Finance figures differ for: ${differingNames.join(", ")}` : "");
+    setRequestReplyDate(new Date().toISOString());
+    setRequestReplyOpen(true);
+  };
+  const confirmRequestReply = () => {
+    if (!openedRequest) return;
+    const notFound = openedRequest.items.some(({ result }) => result.status === "Not found");
+    if (notFound && !requestReplyRemark.trim()) return;
+    const date = requestReplyDate || new Date().toISOString();
+    const remark = requestReplyRemark.trim();
+    recordFeeVerificationRequestReply(openedRequest.examRequest, {
+      date,
+      remark,
+      status: "Recorded (simulated, no message sent)",
+      awaitingAdmissionNos: openedRequest.items
+        .filter(({ item, result }) => (result.status === "Partially Paid" || result.status === "Fee Payment Pending") && item.admissionNo)
+        .map(({ item }) => item.admissionNo),
+    });
+    for (const { item, result, feeMonth } of openedRequest.items) {
+      if (result.status !== "Fee Paid" || item.replyStatus === "Replied" || item.replyStatus === "Updated") continue;
+      recordFeeVerificationReply(item, {
+        date,
+        examRequestId: openedRequest.examRequest.examRequestId,
+        admissionNo: item.admissionNo,
+        feeMonth,
+        remark,
+        status: "Recorded (simulated, no message sent)",
+        verifiedPaid: result.paid,
+        verifiedOutstanding: result.outstanding,
+        verifiedStatus: result.status,
+      });
+    }
+    setRequestReplyOpen(false);
+    setReplyRevision((revision) => revision + 1);
+    toast.success("Recorded (simulated, no message sent)");
+  };
+
+  return (
+    <>
+      <SampleNote>{FEE_VERIFICATION_SOURCE_NOTE}</SampleNote>
+      {!openedRequest ? (
+        <SectionCard>
+          <FilterBar>
+            <SearchBox value={query} onChange={setQuery} placeholder="Search course or request ID" />
+            <FilterSelect label="Course" value={courseFilter} onChange={setCourseFilter} options={courses} />
+          </FilterBar>
+          {filteredRequestRows.length === 0 ? (
+            <EmptyState message="No exam requests match your filters." />
+          ) : (
+            <div className="w-full">
+              <Table className="w-full table-fixed">
+                <TableHeader><TableRow>
+                  <TableHead className="w-[10%]">Request</TableHead><TableHead className="w-[13%]">Course</TableHead><TableHead className="w-[19%] whitespace-normal">Exam</TableHead>
+                  <TableHead className="w-[10%]">Fee month</TableHead><TableHead className="w-[7%]">Students</TableHead><TableHead className="w-[12%]">Cleared</TableHead>
+                  <TableHead className="w-[11%] whitespace-normal">Awaiting payment</TableHead><TableHead className="w-[10%] whitespace-normal">Needs review</TableHead><TableHead className="w-[8%] whitespace-normal">Reply</TableHead>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {filteredRequestRows.map(({ examRequest, items, cleared, awaiting, needsReview, reply }) => {
+                    const total = items.length;
+                    const progress = total ? Math.round((cleared / total) * 100) : 0;
+                    const open = () => openRequest(examRequest.examRequestId, items);
+                    return <TableRow key={examRequest.examRequestId} role="link" tabIndex={0} aria-label={`Open request ${examRequest.examRequestId}, ${examRequest.course}`} className="cursor-pointer hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset" onClick={(event) => { if (rowClickAllowed(event)) open(); }} onKeyDown={(event) => handleRowKeyDown(event, open)}>
+                      <TableCell className="font-medium">{examRequest.examRequestId}</TableCell>
+                      <TableCell className="break-words">{examRequest.course}</TableCell>
+                      <TableCell className="whitespace-normal break-words"><div>{examRequest.examTitle}</div><div className="text-xs text-muted-foreground">{formatDate(examRequest.examDate)}</div></TableCell>
+                      <TableCell>{feeMonthLabel(examRequest.feeMonth)}</TableCell>
+                      <TableCell>{total}</TableCell>
+                      <TableCell className="min-w-0"><div>{cleared} of {total}</div><div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-success" style={{ width: `${progress}%` }} /></div></TableCell>
+                      <TableCell>{awaiting}</TableCell><TableCell>{needsReview}</TableCell><TableCell>{reply}</TableCell>
+                    </TableRow>;
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </SectionCard>
+      ) : (
+        <div className="space-y-4">
+          <Button variant="link" className="h-auto px-0" onClick={() => setOpenRequestId(null)}>← Back to requests</Button>
+          <SectionCard>
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">{openedRequest.examRequest.course} · {openedRequest.examRequest.examTitle}</h2>
+                <p className="text-sm text-muted-foreground">Exam {formatDate(openedRequest.examRequest.examDate)} · Fee month {feeMonthLabel(openedRequest.examRequest.feeMonth)} · {openedRequest.examRequest.examRequestId}</p>
+                <p className="mt-1 text-sm font-medium">{openedRequest.cleared} of {openedRequest.items.length} cleared</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" variant="outline" onClick={startRequestReply}>Reply to Administration</Button>
+                {selectedBulkReminderCandidates.length > 0 && <Button size="sm" variant="outline" onClick={() => setBulkReminderSummary(true)}>Send reminders to unpaid ({selectedBulkReminderCandidates.length})</Button>}
+                {openedRequest.items.some(({ result, item }) => result.status === "Fee Paid" && item.replyStatus !== "Replied" && item.replyStatus !== "Updated") && <Button size="sm" variant="outline" onClick={() => replyToVerified(openedRequest.items)}>Reply to all verified</Button>}
+              </div>
+            </div>
+            {openedRequest.examRequest.replies?.length ? (
+              <section className="mb-4 rounded-md border p-3">
+                <h3 className="text-sm font-semibold">Replies</h3>
+                <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+                  {openedRequest.examRequest.replies.map((reply, index) => <li key={`${reply.date}-${index}`}>{formatReplyTime(reply.date)} · {reply.remark || reply.status}</li>)}
+                </ul>
+              </section>
+            ) : null}
+            <FilterBar>
+              <SearchBox value={studentQuery} onChange={setStudentQuery} placeholder="Search name or Admission No." />
+              <FilterSelect label="Finance result" value={resultFilter} onChange={setResultFilter} options={["Fee Paid", "Partially Paid", "Fee Payment Pending", "Not found"]} />
+              <FilterSelect label="Reply status" value={studentReplyFilter} onChange={setStudentReplyFilter} options={["Ready to reply", "Awaiting payment", "Needs review", "Replied", "Updated"]} />
+            </FilterBar>
+            {filteredStudentRows.length === 0 ? <EmptyState message="No students match your filters." /> : (
+              <div className="w-full">
+                <Table className="w-full table-fixed">
+                  <TableHeader><TableRow><TableHead className="w-10" /><TableHead>Student</TableHead><TableHead>Batch</TableHead><TableHead>Finance result</TableHead><TableHead>Reply status</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {filteredStudentRows.map(({ examRequestId, feeMonth: month, item, result, replyStatus: status }) => (
+                      <TableRow key={item.id} role="link" tabIndex={0} aria-label={`View details for ${item.name}, ${item.admissionNo}`} className="cursor-pointer hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset" onClick={(event) => { if (rowClickAllowed(event)) openStudentDetails(examRequestId, item); }} onKeyDown={(event) => handleRowKeyDown(event, () => openStudentDetails(examRequestId, item))}>
+                        <TableCell>{(result.status === "Partially Paid" || result.status === "Fee Payment Pending") && <Checkbox aria-label={`Select ${item.name} for LMS reminder`} checked={bulkReminderIds.includes(item.id)} onCheckedChange={(checked) => setBulkReminderIds((current) => checked ? [...current, item.id] : current.filter((id) => id !== item.id))} />}</TableCell>
+                        <TableCell><div className="font-medium">{item.name}</div><div className="text-xs text-muted-foreground">{item.admissionNo}</div></TableCell>
+                        <TableCell>{item.batch}</TableCell>
+                        <TableCell><div className="space-y-1"><FeeVerificationBadge status={result.status} /><div className="text-xs text-muted-foreground">Due up to {feeMonthLabel(month)}: {result.status === "Not found" ? "—" : formatINR(result.outstanding)}</div></div></TableCell>
+                        <TableCell><div className="space-y-1"><StatusBadge status={status} />{item.replies?.length ? <div className="text-xs text-muted-foreground">{item.replyStatus === "Updated" ? "Updated" : "Replied"} on {formatReplyTime(item.replies[item.replies.length - 1]!.date)}</div> : null}</div></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </SectionCard>
+        </div>
+      )}
+
+      <Dialog
+        open={!!selected}
+        onOpenChange={(open) => {
+          if (!open) setSelectedRequest(null);
+        }}
+      >
+        <DialogContent className="flex max-h-[90dvh] w-[calc(100vw-1rem)] max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:w-[calc(100vw-2rem)]">
+          {selected && (
+            <>
+              <DialogHeader className="shrink-0 border-b px-6 py-4 pr-14 text-left">
+                <DialogTitle>{selected.item.name}</DialogTitle>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span>{selected.item.admissionNo}</span>
+                  <span>{selected.examRequest.course}</span>
+                  <span>Batch {selected.item.batch}</span>
+                  <span>
+                    Requests {selected.examRequestId} / {selected.item.id}
+                  </span>
+                  <span>{selected.examRequest.examTitle}</span>
+                  <span>Exam date {formatDate(selected.examRequest.examDate)}</span>
+                  <span>Fee month {feeMonthLabel(selected.examRequest.feeMonth)}</span>
+                </div>
+              </DialogHeader>
+              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
+                <section className="space-y-1">
+                  <h3 className="text-sm font-semibold">Administration&apos;s message</h3>
+                  <p className="text-sm text-muted-foreground">{selected.examRequest.instructions}</p>
+                </section>
+                <div className="grid grid-cols-2 gap-3">
+                  <FeeVerificationFigures
+                    title="Administration says"
+                    entries={[
+                      ["Monthly fee", selected.result.status === "Not found" ? "—" : selected.item.monthlyFee],
+                      ["Paid", selected.result.status === "Not found" ? "—" : selected.item.paid],
+                      ["Outstanding", selected.result.status === "Not found" ? "—" : selected.item.outstanding],
+                    ]}
+                  />
+                  <FeeVerificationFigures
+                    title="Finance verified"
+                    entries={[
+                      [`Due up to ${feeMonthLabel(selected.examRequest.feeMonth)}`, selected.result.status === "Not found" ? "—" : selected.result.required],
+                      ["Paid", selected.result.status === "Not found" ? "—" : selected.result.paid],
+                      ["Outstanding", selected.result.status === "Not found" ? "—" : selected.result.outstanding],
+                    ]}
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <FeeVerificationBadge status={selected.result.status} />
+                  {differsFromAdministration && (
+                    <span className="text-sm font-medium text-warning">
+                      Differs from Administration&apos;s figures
+                    </span>
+                  )}
+                </div>
+                {selected.result.status === "Not found" ? (
+                  <p className="text-sm text-muted-foreground">No student or bill found for this Admission No.</p>
+                ) : <section className="space-y-2">
+                  <h3 className="text-sm font-semibold">Installments considered</h3>
+                  {selected.result.installments.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      {selected.result.remark ?? "No installment is due for this fee month."}
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Installment</TableHead>
+                            <TableHead>Due date</TableHead>
+                            <TableHead className="text-right">Amount</TableHead>
+                            <TableHead className="text-right">Paid</TableHead>
+                            <TableHead className="text-right">Outstanding</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {selected.result.installments.map((installment) => (
+                            <TableRow key={`${selected.item.id}-${installment.label}`}>
+                              <TableCell>{installment.label.replace(/Instalment/g, "Installment")}</TableCell>
+                              <TableCell className="whitespace-nowrap">
+                                {formatDate(installment.due)}
+                              </TableCell>
+                              <TableCell className="num text-right">
+                                {formatINR(installment.amount)}
+                              </TableCell>
+                              <TableCell className="num text-right">
+                                {formatINR(installment.paid)}
+                              </TableCell>
+                              <TableCell className="num text-right">
+                                {formatINR(installment.outstanding)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </section>}
+              </div>
+              {selected.result.status === "Not found" && !selected.item.replyStatus ? (
+                <div className="flex shrink-0 flex-wrap items-end gap-3 border-t px-6 py-3">
+                  <div className="flex-1 space-y-1">
+                    <p className="text-sm font-medium text-warning">Needs review</p>
+                    <Label htmlFor="fee-verification-not-found-remark">Remark</Label>
+                    <Textarea id="fee-verification-not-found-remark" value={replyRemark} onChange={(event) => setReplyRemark(event.target.value)} placeholder="Add a review remark" />
+                  </div>
+                  <Button onClick={() => recordReply(selected.examRequestId, selected.item, selected.result, replyRemark)} disabled={!replyRemark.trim()}>Reply: not found</Button>
+                </div>
+              ) : selected.result.status === "Not found" ? (
+                <DialogFooter className="shrink-0 border-t px-6 py-3">
+                  <span className="text-sm text-muted-foreground">{selected.item.replyStatus} on {formatReplyTime(selected.item.replies?.[selected.item.replies.length - 1]?.date ?? selected.examRequest.requestedAt)}</span>
+                </DialogFooter>
+              ) : (
+                <DialogFooter className="shrink-0 gap-2 border-t px-6 py-3">
+                  {selected.result.status !== "Fee Paid" && selected.result.status !== "Not found" && <Button variant="outline" onClick={() => openReminder(selected.item, selected.result.installments)}>Send reminder</Button>}
+                  {selected.result.status !== "Not found" && selected.result.outstanding > 0 && findWorkflowPerson(selected.item) && <Button variant="outline" onClick={() => openRecordPayment(findWorkflowPerson(selected.item)!.id)}>Record payment</Button>}
+                  {selected.item.replyStatus !== "Replied" && selected.item.replyStatus !== "Updated" ? (
+                    <Button onClick={() => { setReplyRemark(""); setReplyRequest({ examRequestId: selected.examRequestId, item: selected.item }); }}>Reply to Administration</Button>
+                  ) : (
+                    <span className="self-center text-sm text-muted-foreground">{selected.item.replyStatus === "Updated" ? "Updated" : "Replied"} on {formatReplyTime(selected.item.replies?.[selected.item.replies.length - 1]?.date ?? selected.examRequest.requestedAt)}</span>
+                  )}
+                </DialogFooter>
+              )}
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!replyRequest} onOpenChange={(open) => !open && setReplyRequest(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Reply to Administration</DialogTitle></DialogHeader>
+          {replyRequest && (() => {
+            const request = requests.find(({ item }) => item.id === replyRequest.item.id)!;
+            const result = request.result;
+            return <div className="space-y-2 text-sm">
+              <p>Exam request: {replyRequest.examRequestId}</p>
+              <p>Admission No.: {replyRequest.item.admissionNo}</p>
+              <p>Fee month: {requests.find(({ item }) => item.id === replyRequest.item.id)?.feeMonth}</p>
+              <p>Status: {result.status}</p>
+              <p>Verified paid: {formatINR(result.paid)}</p>
+              <p>Outstanding: {formatINR(result.outstanding)}</p>
+              <p>Date and time: {formatReplyTime(new Date().toISOString())}</p>
+              <Label htmlFor="fee-verification-reply-remark">Remark</Label>
+              <Textarea id="fee-verification-reply-remark" value={replyRemark} onChange={(event) => setReplyRemark(event.target.value)} />
+            </div>;
+          })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReplyRequest(null)}>Cancel</Button>
+            <Button disabled={!replyRemark.trim()} onClick={() => {
+              if (!replyRequest) return;
+              const request = requests.find(({ item }) => item.id === replyRequest.item.id)!;
+              recordReply(replyRequest.examRequestId, replyRequest.item, request.result, replyRemark);
+            }}>Confirm reply</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={requestReplyOpen} onOpenChange={setRequestReplyOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Reply to Administration</DialogTitle></DialogHeader>
+          {openedRequest && (() => {
+            const cleared = openedRequest.items.filter(({ result }) => result.status === "Fee Paid");
+            const notYetCleared = openedRequest.items.filter(({ result }) => result.status === "Partially Paid" || result.status === "Fee Payment Pending");
+            const notFound = openedRequest.items.filter(({ result }) => result.status === "Not found");
+            return <div className="space-y-3 text-sm">
+              <div><strong>Request ID:</strong> {openedRequest.examRequest.examRequestId}</div>
+              <div><strong>Course:</strong> {openedRequest.examRequest.course}</div>
+              <div><strong>Exam:</strong> {openedRequest.examRequest.examTitle}</div>
+              <div><strong>Fee month:</strong> {feeMonthLabel(openedRequest.examRequest.feeMonth)}</div>
+              <div><strong>Date and time:</strong> {formatReplyTime(requestReplyDate || new Date().toISOString())}</div>
+              <div><strong>Cleared</strong><ul className="list-disc pl-5">{cleared.length ? cleared.map(({ item }) => <li key={item.id}>{item.admissionNo} · {item.name}</li>) : <li>None</li>}</ul></div>
+              <div><strong>Not yet cleared</strong><ul className="list-disc pl-5">{notYetCleared.length ? notYetCleared.map(({ item }) => <li key={item.id}>{item.admissionNo} · {item.name}</li>) : <li>None</li>}</ul></div>
+              <div><strong>Not found</strong><ul className="list-disc pl-5">{notFound.length ? notFound.map(({ item }) => <li key={item.id}>{item.admissionNo}</li>) : <li>None</li>}</ul></div>
+              <div className="space-y-1"><Label htmlFor="fee-verification-request-remark">Remark{notFound.length ? "" : " (optional)"}</Label><Textarea id="fee-verification-request-remark" value={requestReplyRemark} onChange={(event) => setRequestReplyRemark(event.target.value)} /></div>
+              {notFound.length > 0 && !requestReplyRemark.trim() && <p className="text-xs text-destructive" role="alert">A remark is required when students are not found.</p>}
+            </div>;
+          })()}
+          <DialogFooter><Button variant="outline" onClick={() => setRequestReplyOpen(false)}>Cancel</Button><Button disabled={!!openedRequest?.items.some(({ result }) => result.status === "Not found") && !requestReplyRemark.trim()} onClick={confirmRequestReply}>Confirm reply</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!reminderView} onOpenChange={(open) => !open && setReminderView(null)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Send fee reminder through LMS (simulated)</DialogTitle></DialogHeader>
+          {reminderView && (() => {
+            const person = feeWorkflow.persons.find((candidate) => candidate.id === reminderView.personId);
+            const installment = person?.plan.find((candidate) => candidate.id === reminderView.installmentId);
+            return <div className="space-y-3 text-sm">
+              <p className="rounded-md bg-accent p-3 text-accent-foreground">Simulated, no message sent</p>
+              <p><strong>Channel:</strong> LMS</p>
+              <p><strong>To:</strong> student LMS account ({reminderView.admissionNo})</p>
+              <p><strong>Name:</strong> {person?.name}</p>
+              <p><strong>Course:</strong> {person?.course}</p>
+              <p><strong>Installment:</strong> {installment?.label}</p>
+              <p><strong>Outstanding:</strong> {formatINR(reminderView.amount)}</p>
+              <p><strong>Due date:</strong> {installment ? formatDate(installment.dueDate) : "—"}</p>
+              <p className="text-xs text-muted-foreground">Prototype: the LMS is not connected, so messages are only recorded.</p>
+              <div className="space-y-1"><Label htmlFor="fee-verification-lms-message">Message</Label><Textarea id="fee-verification-lms-message" value={reminderMessage} onChange={(event) => { setReminderMessage(event.target.value); setReminderError(event.target.value.trim() ? "" : "Message is required."); }} aria-invalid={!!reminderError} />{reminderError && <p className="text-xs text-destructive" role="alert">{reminderError}</p>}</div>
+            </div>;
+          })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReminderView(null)}>Cancel</Button>
+            <Button onClick={confirmLmsReminder} disabled={!reminderMessage.trim()}>Confirm simulated reminder</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={bulkReminderSummary} onOpenChange={setBulkReminderSummary}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Send reminders through LMS?</DialogTitle></DialogHeader>
+          <p className="text-sm">Send LMS reminders to {selectedBulkReminderCandidates.length} selected student{selectedBulkReminderCandidates.length === 1 ? "" : "s"}, with total amount due {formatINR(selectedBulkReminderCandidates.reduce((total, candidate) => total + candidate.amount, 0))}?</p>
+          <p className="text-xs text-muted-foreground">Prototype: the LMS is not connected, so messages are only recorded.</p>
+          <DialogFooter><Button variant="outline" onClick={() => setBulkReminderSummary(false)}>Cancel</Button><Button onClick={sendBulkReminders} disabled={!selectedBulkReminderCandidates.length}>Confirm reminders</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function FeeVerificationBadge({
+  status,
+}: {
+  status: ReturnType<typeof verifyFeeForMonth>["status"];
+}) {
+  const tone =
+    status === "Fee Paid"
+      ? "border-success/30 bg-success-soft text-success"
+      : status === "Partially Paid"
+        ? "border-warning/30 bg-warning-soft text-warning"
+        : status === "Fee Payment Pending"
+          ? "border-destructive/30 bg-danger-soft text-destructive"
+          : "border-border bg-muted text-muted-foreground";
+  return (
+    <span className={`inline-flex whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-medium ${tone}`}>
+      {status}
+    </span>
+  );
+}
+
+function feeMonthLabel(value: string) {
+  const [year, month] = value.split("-").map(Number);
+  return new Date(year!, month! - 1, 1).toLocaleDateString("en-IN", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function FeeVerificationFigures({
+  title,
+  entries,
+}: {
+  title: string;
+  entries: [string, number | string][];
+}) {
+  return (
+    <section className="rounded-xl border bg-card p-4">
+      <h3 className="mb-3 text-sm font-semibold">{title}</h3>
+      <dl className="space-y-2">
+        {entries.map(([label, amount]) => (
+          <div key={label} className="flex items-center justify-between gap-3 text-sm">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="num font-medium tabular-nums">{typeof amount === "number" ? formatINR(amount) : amount}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   );
 }
 
@@ -271,12 +974,15 @@ function useStudentFilters(studentList?: Student[]) {
   const courses = courseCatalog.courses.map((item) => item.name);
   const departments = courseCatalog.departments;
   const search = query.trim().toLowerCase();
+  const normalizedSearch = normalizeAdmissionNo(query);
   const rows = sourceStudents.filter(
     (student) =>
       (!search ||
         `${student.name} ${student.regNo} ${student.applicationId ?? ""} ${student.phone}`
           .toLowerCase()
           .includes(search) ||
+        (!!normalizedSearch &&
+          normalizeAdmissionNo(student.regNo).includes(normalizedSearch)) ||
         payments.some(
           (payment) =>
             payment.studentId === student.id && payment.receiptNo.toLowerCase().includes(search),
@@ -315,6 +1021,9 @@ function workflowPersonForStudent(student: Student, persons: Person[]) {
     (person) =>
       person.id === student.id ||
       (!!student.applicationId && person.applicationId === student.applicationId) ||
+      (!!person.admissionNo &&
+        !!student.regNo &&
+        canonicalAdmissionNo(person.admissionNo) === canonicalAdmissionNo(student.regNo)) ||
       normalizeContact(person.contact) === normalizeContact(student.phone),
   );
 }
@@ -638,6 +1347,7 @@ function Billing() {
     feeWorkflow,
     receiveFeeWorkflowAdmissionNo,
     saveFeeWorkflowHandoff,
+    sendFeeWorkflowDetailsToAdministration,
   } = useFinance();
   const workflowStudents = useMemo(
     () =>
@@ -685,6 +1395,7 @@ function Billing() {
   const [admissionNumber, setAdmissionNumber] = useState("");
   const [admissionError, setAdmissionError] = useState("");
   const [notifyPersonId, setNotifyPersonId] = useState<string | null>(null);
+  const [sendPersonId, setSendPersonId] = useState<string | null>(null);
   const { todayFilter: requestedTodayFilter, workflowAction, workflowActionInstallmentId } =
     Route.useSearch();
   const [todayFilter, setTodayFilter] = useState<"all" | "dueSoon" | "overdue" | "meeting">(
@@ -737,6 +1448,17 @@ function Billing() {
         handoff.status === "Awaiting Admission No.",
     );
   const selectedNotifyPerson = feeWorkflow.persons.find((person) => person.id === notifyPersonId);
+  const selectedSendPerson = feeWorkflow.persons.find((person) => person.id === sendPersonId);
+  const sendPayments = selectedSendPerson
+    ? feeWorkflow.payments.filter((payment) => payment.personId === selectedSendPerson.id)
+    : [];
+  const sendSnapshot = selectedSendPerson
+    ? buildAdministrationDetailsPayload(selectedSendPerson, sendPayments)
+    : undefined;
+  const canSendDetails =
+    !!selectedSendPerson &&
+    canSendToAdministration(selectedSendPerson, sendPayments) &&
+    !hasAdministrationDetailsEvent(selectedSendPerson.id, feeWorkflow.handoffs);
   const notificationPayload = selectedNotifyPerson
     ? buildPaymentNotificationPayload(selectedNotifyPerson, feeWorkflow.payments)
     : null;
@@ -787,14 +1509,17 @@ function Billing() {
     return matching.sort((left, right) => left.dueDate.localeCompare(right.dueDate))[0];
   };
   const runNextAction = (person: Person, action: FeeNextAction) => {
-    if (action === "Review Application" || action === "Send to Administration") {
+    if (action === "Review Application") {
       navigate({
         search: {
           tab: "applications",
           applicationPersonId: person.id,
-          applicationAction: action === "Send to Administration" ? "send" : undefined,
         },
       });
+      return;
+    }
+    if (action === "Send to Administration") {
+      setSendPersonId(person.id);
       return;
     }
     if (action === "Record Payment") {
@@ -888,7 +1613,7 @@ function Billing() {
     if (result !== true) {
       setAdmissionError(
         result === "invalid"
-          ? "Enter a number in the format ADM2026-###."
+          ? "Enter a number in the format ADM-2026-0517."
           : result === "duplicate"
             ? "This Admission No. is already assigned."
             : "This handoff is no longer awaiting an Admission No.",
@@ -1151,6 +1876,15 @@ function Billing() {
                   !!person && !person.admissionNo && pendingAdministrationHandoff(person.id);
                 const hasUnnotifiedPayment =
                   !!person?.admissionNo && personPayments.some((payment) => !payment.adminNotified);
+                const administrationDetailsSentAt = person
+                  ? feeWorkflow.handoffs
+                      .find(
+                        (handoff) =>
+                          handoff.personId === person.id && handoff.target === "Administration",
+                      )
+                      ?.history.find((entry) => entry.text === ADMINISTRATION_DETAILS_SENT_TEXT)
+                      ?.date
+                  : undefined;
                 const action = person
                   ? nextAction(person, personPayments, feeWorkflow.handoffs)
                   : null;
@@ -1215,7 +1949,11 @@ function Billing() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1 whitespace-nowrap">
-                        {person && action && (
+                        {administrationDetailsSentAt ? (
+                          <span className="text-xs text-muted-foreground">
+                            Sent on {formatReminderDateTime(administrationDetailsSentAt)}
+                          </span>
+                        ) : person && action && (
                           <Button
                             size="sm"
                             variant="outline"
@@ -1334,8 +2072,8 @@ function Billing() {
                   setAdmissionNumber(event.target.value);
                   setAdmissionError("");
                 }}
-                placeholder="ADM2026-###"
-                maxLength={11}
+                placeholder="ADM-2026-0517"
+                maxLength={13}
                 aria-invalid={!!admissionError}
               />
             </Field>
@@ -1360,6 +2098,34 @@ function Billing() {
         onOpenChange={(open) => !open && setNotifyPersonId(null)}
         onConfirm={confirmPaymentNotification}
       />
+      <Dialog open={!!sendPersonId} onOpenChange={(open) => !open && setSendPersonId(null)}>
+        <DialogContent className="flex max-h-[90dvh] w-[calc(100vw-1rem)] max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:w-[calc(100vw-2rem)]">
+          <DialogHeader className="border-b px-4 py-4 text-left sm:px-6">
+            <DialogTitle>Send application details to Administration (simulated)</DialogTitle>
+          </DialogHeader>
+          {sendSnapshot && selectedSendPerson && (
+            <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+              <ApplicationDetails snapshot={sendSnapshot} plan={selectedSendPerson.plan} />
+            </div>
+          )}
+          <DialogFooter className="border-t px-4 py-3 sm:px-6">
+            <Button variant="outline" onClick={() => setSendPersonId(null)}>
+              Cancel
+            </Button>
+            <Button
+              disabled={!canSendDetails}
+              onClick={() => {
+                if (!selectedSendPerson || !canSendDetails) return;
+                sendFeeWorkflowDetailsToAdministration(selectedSendPerson.id);
+                setSendPersonId(null);
+                toast.success(ADMINISTRATION_DETAILS_SENT_TEXT);
+              }}
+            >
+              Confirm
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       {creating && (
         <CreateBill
           initialStudent={selected.length === 1 ? billingStudents.find((student) => student.id === selected[0]) : undefined}
@@ -1398,6 +2164,8 @@ export function BillDetails({
     installmentId: string;
     requestId: string;
   } | null>(null);
+  const [reminderMessageDraft, setReminderMessageDraft] = useState("");
+  const [reminderMessageError, setReminderMessageError] = useState("");
   const [meetingInstallmentId, setMeetingInstallmentId] = useState<string | null>(null);
   const [meetingNote, setMeetingNote] = useState("");
   const [receipt, setReceipt] = useState<FeePayment | null>(null);
@@ -1451,6 +2219,11 @@ export function BillDetails({
           settings.institution.name,
         )
       : null;
+  useEffect(() => {
+    if (!reminderRow) return;
+    setReminderMessageDraft(reminderEmail?.body ?? "");
+    setReminderMessageError("");
+  }, [reminderRow?.requestId, reminderEmail?.body]);
   const defaultReminderInstallment = workflowPerson?.plan
     .filter(
       (installment) =>
@@ -1568,6 +2341,10 @@ export function BillDetails({
     });
   };
   const confirmReminder = () => {
+    if (!reminderMessageDraft.trim()) {
+      setReminderMessageError("Message is required.");
+      return;
+    }
     if (
       !workflowPerson ||
       !reminderRow ||
@@ -1588,10 +2365,10 @@ export function BillDetails({
     logInstallmentReminder(workflowPerson.id, reminderInstallment.id, {
       id: reminderRow.requestId,
       date: new Date().toISOString(),
-      text: "Reminder sent (simulated)",
+      text: `Queued for LMS\n${reminderMessageDraft}`,
     });
     setReminderRow(null);
-    toast.success("Reminder logged (simulated). No message was sent.");
+    toast.success("Queued for LMS");
   };
   const saveMeetingNote = () => {
     if (!workflowPerson || !meetingInstallment || !meetingNote.trim()) return;
@@ -2005,25 +2782,47 @@ export function BillDetails({
       <Dialog open={!!reminderRow} onOpenChange={(open) => !open && setReminderRow(null)}>
         <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Send fee reminder (simulated)</DialogTitle>
+            <DialogTitle>Send fee reminder through LMS (simulated)</DialogTitle>
           </DialogHeader>
           {workflowPerson && reminderInstallment && reminderEmail && (
             <div className="space-y-3 text-sm">
               <p className="rounded-md bg-accent p-3 text-accent-foreground">
                 Simulated, no message sent
               </p>
-              <p><strong>To:</strong> {reminderEmail.to || "Not provided"}</p>
+              <p><strong>Channel:</strong> LMS</p>
+              <p><strong>To:</strong> student LMS account ({workflowPerson.admissionNo || student.regNo})</p>
               <p><strong>Name:</strong> {workflowPerson.name}</p>
               <p><strong>Course:</strong> {workflowPerson.course}</p>
               <p><strong>Installment:</strong> {reminderInstallment.label}</p>
               <p><strong>Outstanding:</strong> {formatINR(reminderAmount)}</p>
               <p><strong>Due date:</strong> {formatDate(reminderInstallment.dueDate)}</p>
-              <div className="rounded-md border bg-muted/40 p-3">{reminderEmail.body}</div>
+              <p className="text-xs text-muted-foreground">Prototype: the LMS is not connected, so messages are only recorded.</p>
+              <div className="space-y-1">
+                <Label htmlFor="reminder-message">Message</Label>
+                <Textarea
+                  id="reminder-message"
+                  value={reminderMessageDraft}
+                  onChange={(event) => {
+                    setReminderMessageDraft(event.target.value);
+                    if (event.target.value.trim()) setReminderMessageError("");
+                    else setReminderMessageError("Message is required.");
+                  }}
+                  aria-invalid={!!reminderMessageError}
+                />
+                {reminderMessageError && (
+                  <p className="text-xs text-destructive" role="alert">
+                    {reminderMessageError}
+                  </p>
+                )}
+              </div>
             </div>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setReminderRow(null)}>Cancel</Button>
-            <Button onClick={confirmReminder} disabled={!reminderInstallment || reminderAmount <= 0}>
+            <Button
+              onClick={confirmReminder}
+              disabled={!reminderInstallment || reminderAmount <= 0 || !reminderMessageDraft.trim()}
+            >
               Confirm simulated reminder
             </Button>
           </DialogFooter>

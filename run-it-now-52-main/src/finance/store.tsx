@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { cashCountReducer, initialCashCount } from "./cashCount";
+import { canonicalAdmissionNo } from "./billing";
 import { seedCourseCatalog, SEED_DEPARTMENTS } from "./courses";
 import {
   EXPENSE_CATEGORIES,
@@ -365,6 +366,19 @@ function useFinanceState() {
             : payment,
         ),
       })),
+    recordFeeWorkflowPaymentConfirmation: (payment: FeeWorkflowPayment) =>
+      setFeeWorkflow((current) => ({
+        ...current,
+        payments: current.payments.map((item) =>
+          item.id !== payment.id
+            ? item
+            : {
+                ...item,
+                confirmation: payment.confirmation,
+                confirmationHistory: payment.confirmationHistory,
+              },
+        ),
+      })),
     notifyFeeWorkflowPayments: (paymentIds: string[]) =>
       setFeeWorkflow((current) => {
         const payments = markPaymentsAdministrationNotified(current.payments, paymentIds);
@@ -462,7 +476,7 @@ function useFinanceState() {
     ): true | "invalid" | "duplicate" | "missing" | "not-awaiting" => {
       const validation = validateAdmissionNo(admissionNo, personId, feeWorkflow.persons, students);
       if (validation !== "valid") return validation;
-      const normalized = admissionNo.trim();
+      const normalized = canonicalAdmissionNo(admissionNo);
       const person = feeWorkflow.persons.find((item) => item.id === personId);
       if (!person) return "missing";
       const administrationHandoff = feeWorkflow.handoffs.find(

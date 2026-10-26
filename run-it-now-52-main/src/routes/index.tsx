@@ -14,6 +14,7 @@ import {
 } from "@/finance/logic";
 import { AttentionItemLink } from "@/components/finance/AttentionItemLink";
 import { useRecordPayment } from "@/components/finance/RecordPaymentContext";
+import { getFeeVerificationAttentionRequests, sampleExamRequests } from "@/finance/feeVerificationSim";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -94,6 +95,7 @@ function Dashboard() {
     cashBalance: balances.cash,
     bankBalance: balances.bank,
     physicalCount,
+    feeVerificationRequests: getFeeVerificationAttentionRequests(sampleExamRequests, students, payments),
   });
 
   return (
@@ -179,7 +181,7 @@ function Dashboard() {
           {attentionItems.length === 0
             ? <p className="text-sm text-muted-foreground">Nothing needs attention.</p>
             : <ul className="space-y-2 text-sm">{attentionItems.map((item) => (
-              <li key={item.key}>
+              <li key={item.key === "feeVerification" ? `${item.key}:${item.requestId}` : item.key}>
                 <AttentionItemLink item={item} className="flex justify-between gap-2 hover:text-primary" />
               </li>
             ))}</ul>}

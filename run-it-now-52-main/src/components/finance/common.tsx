@@ -117,10 +117,10 @@ const statColorVar: Record<StatColor, string> = {
 };
 
 /** The single shared KPI card. Place cards inside a StatGrid wrapper. */
-export function StatCard({ label, value, hint, caption, tone, icon, color, empty }: {
+export function StatCard({ label, value, hint, caption, tone, icon, color, empty, compact = false }: {
   label: string; value: string | null; hint?: string | undefined; caption?: string | undefined;
   tone?: "success" | "danger" | "warning" | undefined; icon?: LucideIcon | undefined;
-  color?: StatColor | undefined; empty?: string | undefined;
+  color?: StatColor | undefined; empty?: string | undefined; compact?: boolean | undefined;
 }) {
   const Icon = icon ?? statIcon(label);
   const sub = caption ?? hint;
@@ -128,11 +128,11 @@ export function StatCard({ label, value, hint, caption, tone, icon, color, empty
   const shown = value ?? empty ?? "—";
   return (
     <Card className="stat-card relative min-w-0 rounded-2xl p-4 shadow-soft">
-      <p className="min-w-0 pr-10 text-[11px] font-semibold uppercase leading-[12px] tracking-wide text-muted-foreground">{label}</p>
+      <p title={label} className="min-w-0 pr-10 text-[11px] font-semibold uppercase leading-[12px] tracking-wide text-muted-foreground">{label}</p>
       <span aria-hidden="true"
         className={cn("absolute right-4 top-4 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl", !color && statIconTone(label, tone))}
         style={color ? { backgroundColor: `color-mix(in oklab, ${statColorVar[color]} 12%, transparent)`, color: statColorVar[color] } : undefined}>
-        <Icon className="h-[18px] w-[18px]" />
+        <Icon className={compact ? "h-4 w-4" : "h-[18px] w-[18px]"} />
       </span>
       <p className={cn("num stat-value mt-1 min-w-0 whitespace-nowrap font-bold tabular-nums leading-tight",
         isEmpty && "text-muted-foreground", shown === "Not counted" && "!text-base",
@@ -140,7 +140,7 @@ export function StatCard({ label, value, hint, caption, tone, icon, color, empty
         !isEmpty && tone === "warning" && "text-warning")}>
         {shown}
       </p>
-      <p className="mt-1 min-w-0 text-xs leading-[12px] text-muted-foreground">{sub || "\u00A0"}</p>
+      <p title={compact ? sub : undefined} className="mt-1 min-w-0 text-xs leading-[12px] text-muted-foreground">{sub || "\u00A0"}</p>
     </Card>
   );
 }
@@ -229,12 +229,12 @@ export function DateRange({ from, to, onChange, quickRange, onQuickRangeChange, 
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Input type="date" aria-label="From date" className="w-[150px]" value={from} onChange={(e) => onChange(e.target.value, to)} />
+      <Input type="date" aria-label="From date" className="h-9 w-[150px]" value={from} onChange={(e) => onChange(e.target.value, to)} />
       <span className="text-xs text-muted-foreground">to</span>
-      <Input type="date" aria-label="To date" className="w-[150px]" value={to} onChange={(e) => onChange(from, e.target.value)} />
+      <Input type="date" aria-label="To date" className="h-9 w-[150px]" value={to} onChange={(e) => onChange(from, e.target.value)} />
       {quickRange !== undefined && onQuickRangeChange && (
         <Select value={quickRange} onValueChange={onQuickRangeChange}>
-          <SelectTrigger aria-label="Quick range" className="w-[160px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger aria-label="Quick range" className="h-9 w-[190px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="today">Today</SelectItem>
             <SelectItem value="month">This month</SelectItem>

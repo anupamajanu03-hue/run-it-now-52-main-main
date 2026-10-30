@@ -10,6 +10,7 @@ import {
 import { buildBookStatement } from "@/finance/books";
 import { useFinance, useLedgerEntries, type LedgerEntry } from "@/finance/store";
 import { TODAY, formatDate, formatINR, inRange, isCash, sum } from "@/finance/logic";
+import { BankStatementImport, ImportedStatementList } from "@/components/finance/BankStatementImport";
 
 export const Route = createFileRoute("/ledgers")({
   validateSearch: tabSearch,
@@ -63,11 +64,12 @@ function LedgersPage() {
   );
 }
 
-function Book({ kind, entries, q, setQ, from, to, setRange, account, setAccount, ledgerOptions }: {
+export function Book({ kind, entries, q, setQ, from, to, setRange, account, setAccount, ledgerOptions }: {
   kind: "cash" | "bank" | "general"; entries: LedgerEntry[]; q: string; setQ: (v: string) => void; from: string; to: string;
   setRange: (f: string, t: string) => void; account: string; setAccount: (v: string) => void; ledgerOptions: string[];
 }) {
   const [viewing, setViewing] = useState<(LedgerEntry & { balance: number }) | null>(null);
+  const { bankStatementImports, bankStatementImportsLoaded, addBankStatementImport } = useFinance();
   const scope = entries.filter((e) => kind === "general" || (kind === "cash" ? isCash(e.method) : !isCash(e.method)));
   const ledgers = kind === "general" ? ledgerOptions : [...new Set(scope.map((e) => e.category))].sort();
   const accounts = [...new Set(scope.map((e) => kind === "bank" ? e.method : e.category))].sort();
@@ -83,7 +85,9 @@ function Book({ kind, entries, q, setQ, from, to, setRange, account, setAccount,
     result.push({ ...entry, balance: previousBalance + signed(entry) });
     return result;
   }, []);
-  const rows = calculatedRows.filter((e) => !q || `${e.description} ${e.reference} ${e.category}`.toLowerCase().includes(q.toLowerCase()));
+  const rows = calculatedRows.filter((e) =>
+    !q || `${e.id} ${e.description} ${e.reference} ${"bankReference" in e ? e.bankReference ?? "" : ""} ${e.category}`.toLowerCase().includes(q.toLowerCase()),
+  );
   const closing = bookStatement?.closing ?? calculatedRows.at(-1)?.balance ?? opening;
   const generalSummary = kind === "general" ? ledgers.map((ledger) => {
     const ledgerEntries = scope.filter((entry) => entry.category === ledger);
@@ -99,7 +103,7 @@ function Book({ kind, entries, q, setQ, from, to, setRange, account, setAccount,
       credit,
       closing: openingBalance + debit - credit,
     };
-  }).filter((item) => !q || `${item.ledger} ${item.entries.map((entry) => `${entry.description} ${entry.reference}`).join(" ")}`
+  }).filter((item) => !q || `${item.ledger} ${item.entries.map((entry) => `${entry.id} ${entry.description} ${entry.reference}`).join(" ")}`
     .toLowerCase().includes(q.toLowerCase())) : [];
   const allLedgerView = kind === "general" && account === "all";
   const generalTotals = kind === "general"
@@ -128,7 +132,15 @@ function Book({ kind, entries, q, setQ, from, to, setRange, account, setAccount,
           {kind === "general"
             ? <FilterSelect label="Ledgers" all="All" value={account} onChange={setAccount} options={ledgers} />
             : <FilterSelect label={kind === "bank" ? "Channels" : "Ledger Names"} value={account} onChange={setAccount} options={accounts} />}
+          {kind === "bank" && (
+            <BankStatementImport
+              imports={bankStatementImports}
+              onImport={addBankStatementImport}
+              ready={bankStatementImportsLoaded}
+            />
+          )}
         </FilterBar>
+        {kind === "bank" && <ImportedStatementList imports={bankStatementImports} />}
         {allLedgerView ? generalSummary.length === 0 ? <EmptyState /> : (
           <Table>
             <TableHeader><TableRow>
@@ -152,6 +164,7 @@ function Book({ kind, entries, q, setQ, from, to, setRange, account, setAccount,
           <Table>
             <TableHeader><TableRow>
               <TableHead>Date</TableHead>
+              <TableHead>Transaction ID</TableHead>
               {kind === "general" && <TableHead>Ledger Name</TableHead>}
               <TableHead>Particulars</TableHead>
               <TableHead>{kind === "bank" ? "Type" : kind === "cash" ? "Ledger Name" : "Payment Mode"}</TableHead>
@@ -162,6 +175,7 @@ function Book({ kind, entries, q, setQ, from, to, setRange, account, setAccount,
               {rows.map((e) => (
                 <TableRow key={e.id} onRowClick={() => setViewing(e)} rowLabel={`View ledger entry: ${e.description}`}>
                   <TableCell className="whitespace-nowrap">{formatDate(e.date)}</TableCell>
+                  <TableCell className="max-w-36 break-all font-mono text-xs">{e.id}</TableCell>
                   {kind === "general" && <TableCell>{e.category}</TableCell>}
                   <TableCell>{e.description}</TableCell>
                   <TableCell>{kind === "bank" ? `${e.type === "income" ? "Deposit" : "Withdrawal"} · ${e.method}` : kind === "cash" ? e.category : e.method}</TableCell>
@@ -193,6 +207,10 @@ function Book({ kind, entries, q, setQ, from, to, setRange, account, setAccount,
 function LedgerDetails({ entry, kind }: { entry: LedgerEntry & { balance: number }; kind: "cash" | "bank" | "general" }) {
   const fields: [string, string | undefined][] = [
     ["Date", formatDate(entry.date)], ["Particulars", entry.description], ["Ledger Name", entry.category],
+    ["Transaction ID", entry.id],
+    ...(entry.source === "txn" && entry.bankReference
+      ? [["Bank Reference / UTR No.", entry.bankReference] as [string, string]]
+      : []),
     ["Type", entry.type === "income" ? "Income" : "Expense"],
     ["Reference", entry.source === "txn" ? entry.reference || undefined : undefined],
     ["Transaction reference", entry.source === "fee" ? entry.reference || undefined : undefined],

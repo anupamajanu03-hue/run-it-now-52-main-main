@@ -371,6 +371,42 @@ export function hasAdministrationDetailsEvent(personId: string, handoffs: Handof
   );
 }
 
+export type ApplicationStage = "Admitted" | "With Administration" | "Ready to send" | "To review" | "Awaiting payment";
+
+export function applicationStage(
+  person: Person,
+  payments: FeeWorkflowPayment[] = [],
+  handoffs: Handoff[] = [],
+  requireApplicationReview = REQUIRE_APPLICATION_REVIEW,
+): ApplicationStage {
+  if (person.admissionNo) return "Admitted";
+  if (hasAdministrationDetailsEvent(person.id, handoffs)) return "With Administration";
+  const firstInstallment = person.plan[0];
+  if (
+    firstInstallment &&
+    firstInstallment.amountDue > 0 &&
+    installmentOutstanding(firstInstallment, payments) === 0
+  )
+    return "Ready to send";
+  if (requireApplicationReview && person.applicationStatus === "Received") return "To review";
+  return "Awaiting payment";
+}
+
+export function filterApplicationsByStage(
+  people: Person[],
+  payments: FeeWorkflowPayment[],
+  handoffs: Handoff[],
+  stage: ApplicationStage | "All" | null,
+): Person[] {
+  return people.filter((person) => {
+    const personPayments = payments.filter((payment) => payment.personId === person.id);
+    const currentStage = applicationStage(person, personPayments, handoffs);
+    if (stage === "All") return true;
+    if (stage) return currentStage === stage;
+    return currentStage !== "Admitted";
+  });
+}
+
 /** Eligible and no details event yet; used for prompts. */
 export function isEligibleNow(
   person: Person,
@@ -690,7 +726,7 @@ export function buildPaymentConfirmationEmail(
   const personPayments = allPayments.filter((item) => item.personId === person.id);
   const covered = payment.allocations.map((allocation) => {
     const installment = person.plan.find((item) => item.id === allocation.installmentId);
-    return `Installment ${installment?.label ?? "covered"}: ${emailINR(allocation.amount)}`;
+    return `${installment?.label.replaceAll("Instalment", "Installment") ?? "Installment covered"}: ${emailINR(allocation.amount)}`;
   });
   const totals = personTotals(person, personPayments);
   const nextDue = totals.nextDueInstallment;
@@ -702,7 +738,7 @@ export function buildPaymentConfirmationEmail(
     `Installment(s) covered: ${covered.join(", ") || "None"}`,
     `Balance remaining: ${emailINR(totals.outstanding)}`,
     nextDue
-      ? `Next installment due: Installment ${nextDue.label}, ${emailINR(installmentOutstanding(nextDue, personPayments))} on ${emailDate(nextDue.dueDate)}`
+      ? `Next installment due: ${nextDue.label.replaceAll("Instalment", "Installment")}, ${emailINR(installmentOutstanding(nextDue, personPayments))} on ${emailDate(nextDue.dueDate)}`
       : "Next installment due: None",
     person.admissionNo
       ? `Admission No.: ${person.admissionNo}`
@@ -728,8 +764,8 @@ export function buildPaymentReminderEmail(
   const dueWording = dueDate < TODAY ? `which was due on ${date}` : `by ${date}`;
   return {
     to: student.email ?? "",
-    subject: `Fee reminder - ${student.name} - ${installment}`,
-    body: `Dear ${student.name}, ${institution} records ${inr(amountDue)} outstanding for ${installment} in ${student.course}, ${dueWording}. Please pay through the institute's accepted payment methods and share the transaction reference with Accounts.`,
+    subject: `Fee reminder - ${student.name} - ${installment.replaceAll("Instalment", "Installment")}`,
+    body: `Dear ${student.name}, ${institution} records ${inr(amountDue)} outstanding for ${installment.replaceAll("Instalment", "Installment")} in ${student.course}, ${dueWording}. Please pay through the institute's accepted payment methods and share the transaction reference with Accounts.`,
   };
 }
 

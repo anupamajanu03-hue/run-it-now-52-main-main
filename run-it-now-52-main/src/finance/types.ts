@@ -39,6 +39,7 @@ export interface Student {
 
 export interface StudentApplicationDetails {
   dateOfBirth: string;
+  passportPhoto?: { fileName: string; previewUrl: string } | undefined;
   addressLine1: string;
   addressLine2: string;
   city: string;
@@ -54,11 +55,11 @@ export interface StudentApplicationDetails {
   coursePreference: string;
   installmentPreference: number;
   documents: {
-    identityProof: boolean;
-    academicRecords: boolean;
-    photograph: boolean;
-    resume: boolean;
-  };
+    type: "ID proof" | "Address proof" | "Latest marksheet" | "TC";
+    fileName?: string | undefined;
+    provided: boolean;
+  }[];
+  documentsEnclosed?: string[] | undefined;
   declarationAccepted: boolean;
 }
 
@@ -77,6 +78,9 @@ export interface Installment {
   meetingNotes: string[];
 }
 
+export const displayInstallmentLabel = (label: string) =>
+  label.replaceAll("Instalment", "Installment");
+
 export type ApplicationStatus = "Received" | "Reviewed" | "Payment Recorded" | "Admitted";
 export type AdmissionStatus = "Applicant" | "Admitted";
 export type FeeWorkflowPaymentStatus = "Unpaid" | "Partially paid" | "Paid";
@@ -91,6 +95,7 @@ export interface Person {
   applicationId: string;
   admissionNo?: string | undefined;
   applicationStatus: ApplicationStatus;
+  accountantVerifiedAt?: string | undefined;
   admissionStatus?: AdmissionStatus | undefined;
   paymentStatus?: FeeWorkflowPaymentStatus | undefined;
   billCreated?: boolean | undefined;
@@ -244,6 +249,7 @@ export interface Transaction {
   reference: string;
   status: "Posted" | "Pending" | "Approved";
   receiptNo?: string | undefined;
+  bankReference?: string | undefined;
   to?: string | undefined;
   paymentMode?: PaymentMode | undefined;
 }

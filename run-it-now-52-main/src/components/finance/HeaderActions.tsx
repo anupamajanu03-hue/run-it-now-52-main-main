@@ -12,7 +12,6 @@ import { AttentionItemLink } from "@/components/finance/AttentionItemLink";
 import { getNeedsAttention } from "@/finance/logic";
 import { useFinance } from "@/finance/store";
 import { useTheme } from "@/hooks/use-theme";
-import { getFeeVerificationAttentionRequests, sampleExamRequests } from "@/finance/feeVerificationSim";
 
 export function HeaderActions() {
   const { resolvedTheme, toggle } = useTheme();
@@ -24,7 +23,6 @@ export function HeaderActions() {
     cashBalance: balances.cash,
     bankBalance: balances.bank,
     physicalCount,
-    feeVerificationRequests: getFeeVerificationAttentionRequests(sampleExamRequests, students, payments),
   });
 
   return (
@@ -59,7 +57,7 @@ export function HeaderActions() {
           {attentionItems.length === 0
             ? <p className="px-2 py-3 text-sm text-muted-foreground">Nothing needs attention</p>
             : attentionItems.map((item) => (
-              <DropdownMenuItem key={item.key === "feeVerification" ? `${item.key}:${item.requestId}` : item.key} asChild>
+              <DropdownMenuItem key={item.key} asChild>
                 <AttentionItemLink item={item} className="flex justify-between gap-3 whitespace-normal hover:text-primary" />
               </DropdownMenuItem>
             ))}

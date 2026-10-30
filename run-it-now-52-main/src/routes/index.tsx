@@ -14,7 +14,6 @@ import {
 } from "@/finance/logic";
 import { AttentionItemLink } from "@/components/finance/AttentionItemLink";
 import { useRecordPayment } from "@/components/finance/RecordPaymentContext";
-import { getFeeVerificationAttentionRequests, sampleExamRequests } from "@/finance/feeVerificationSim";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -95,7 +94,6 @@ function Dashboard() {
     cashBalance: balances.cash,
     bankBalance: balances.bank,
     physicalCount,
-    feeVerificationRequests: getFeeVerificationAttentionRequests(sampleExamRequests, students, payments),
   });
 
   return (
@@ -121,16 +119,16 @@ function Dashboard() {
         <Button asChild size="sm" variant="outline"><Link to="/settlements" search={{ tab: "overview" }}><Scale className="mr-1.5 h-4 w-4" />Review Settlements</Link></Button>
       </div>
 
-      <StatGrid className="mb-4">
-        <StatCard label="Total income" value={formatINR(fee + other)} hint="Fees and other income" />
-        <StatCard label="Total expenses" value={formatINR(exp)} hint="Expenses paid in period" />
-        <StatCard label="Petty cash balance" value={signedINR(balances.pettyBook)} hint="Current petty cash book balance" />
-        <StatCard label="Outstanding fees" value={formatINR(totalOutstanding)} tone="danger" hint="As of today" />
-        <StatCard label="Bank balance" value={signedINR(balances.bank)} hint="All bank accounts" />
+      <StatGrid className="dashboard-stat-grid mb-4">
+        <StatCard label="Total income" value={formatINR(fee + other)} hint="Fees and other income" compact />
+        <StatCard label="Total expenses" value={formatINR(exp)} hint="Expenses paid in period" compact />
+        <StatCard label="Petty cash balance" value={signedINR(balances.pettyBook)} hint="Current petty cash book balance" compact />
+        <StatCard label="Outstanding fees" value={formatINR(totalOutstanding)} tone="danger" hint="As of today" compact />
+        <StatCard label="Bank balance" value={signedINR(balances.bank)} hint="All bank accounts" compact />
       </StatGrid>
 
-      <div className="mb-6 grid gap-4 xl:grid-cols-3">
-        <SectionCard title="Income vs expenses" subtitle="Monthly totals for the selected period" className="xl:col-span-2">
+      <div className="dashboard-panels mb-6">
+        <SectionCard title="Income vs expenses" subtitle="Monthly totals for the selected period" className="dashboard-income-card">
           <div className="h-[260px]">
             <ResponsiveContainer>
               <BarChart data={chart}>
@@ -148,23 +146,21 @@ function Dashboard() {
             </ResponsiveContainer>
           </div>
         </SectionCard>
-        <div className="grid grid-cols-2 items-stretch gap-4 xl:col-span-3">
-          <SectionCard title="Pending settlements" action={<Link to="/settlements" search={{ tab: "overview" }} className="text-xs text-primary">View all</Link>} className="h-full p-4">
-            {pending.length === 0 ? <p className="text-sm text-muted-foreground">All settlements finalized.</p> : (
-              <ul className="space-y-2 text-sm">
-                {pending.map((s) => (
-                  <li key={s.id} className="flex items-center justify-between gap-2">
-                    <span>{formatDate(s.date)} · {s.method}</span><StatusBadge status={settlementStatus(s)} />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </SectionCard>
-          <SectionCard title="Overdue fees" action={<Link to="/fees" search={{ tab: "billing", todayFilter: "overdue" }} className="text-xs text-primary">View</Link>} className="h-full p-4">
-            <p className="num text-lg font-semibold text-destructive">{formatINR(sum(overdue.map((s) => outstanding(s, payments))))}</p>
-            <p className="text-xs text-muted-foreground">{overdue.length} students with overdue installments</p>
-          </SectionCard>
-        </div>
+        <SectionCard title="Pending settlements" action={<Link to="/settlements" search={{ tab: "overview" }} className="text-xs text-primary">View all</Link>} className="dashboard-summary-card p-4">
+          {pending.length === 0 ? <p className="text-sm text-muted-foreground">All settlements finalized.</p> : (
+            <ul className="space-y-2 text-sm">
+              {pending.map((s) => (
+                <li key={s.id} className="flex items-center justify-between gap-2">
+                  <span>{formatDate(s.date)} · {s.method}</span><StatusBadge status={settlementStatus(s)} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </SectionCard>
+        <SectionCard title="Overdue fees" action={<Link to="/fees" search={{ tab: "billing", todayFilter: "overdue" }} className="text-xs text-primary">View</Link>} className="dashboard-summary-card p-4">
+          <p className="num text-lg font-semibold text-destructive">{formatINR(sum(overdue.map((s) => outstanding(s, payments))))}</p>
+          <p className="text-xs text-muted-foreground">{overdue.length} students with overdue installments</p>
+        </SectionCard>
       </div>
 
       <div className="mb-6">
@@ -181,7 +177,7 @@ function Dashboard() {
           {attentionItems.length === 0
             ? <p className="text-sm text-muted-foreground">Nothing needs attention.</p>
             : <ul className="space-y-2 text-sm">{attentionItems.map((item) => (
-              <li key={item.key === "feeVerification" ? `${item.key}:${item.requestId}` : item.key}>
+              <li key={item.key}>
                 <AttentionItemLink item={item} className="flex justify-between gap-2 hover:text-primary" />
               </li>
             ))}</ul>}

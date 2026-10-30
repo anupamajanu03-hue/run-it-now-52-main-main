@@ -57,8 +57,13 @@ import {
 } from "./feeWorkflow";
 import { personFromStudent } from "./feeWorkflowConfig";
 import type { FeeWorkflowState } from "./feeWorkflow";
+import { ensureTransactionIds } from "./transactionIds";
+import type { BankStatementImport } from "./bankStatementImport";
+import type { BankReconciliationDecision } from "./bankReconciliation";
 
 const COURSE_CATALOG_STORAGE_KEY = "finance-course-catalog-v2";
+const BANK_STATEMENT_IMPORTS_STORAGE_KEY = "finance-bank-statement-imports-v1";
+const BANK_RECONCILIATION_STORAGE_KEY = "finance-bank-reconciliation-v1";
 
 const INITIAL_FEE_WORKFLOW = createDemoFeeWorkflow(seedStudents, seedPayments);
 const INITIAL_DEMO_STUDENTS = createDemoBillingStudents(INITIAL_FEE_WORKFLOW);
@@ -127,7 +132,44 @@ function useFinanceState() {
   const [feeWorkflow, setFeeWorkflow] = useState<FeeWorkflowState>(INITIAL_FEE_WORKFLOW);
   const workflowPaymentRequests = useRef(new Map<string, FeeWorkflowPayment>());
   const [reminders, setReminders] = useState<FeeReminder[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>(seedTransactions);
+  const [transactions, setTransactions] = useState<Transaction[]>(() =>
+    ensureTransactionIds(seedTransactions),
+  );
+  const [bankStatementImports, setBankStatementImports] = useState<BankStatementImport[]>([]);
+  const [bankStatementImportsLoaded, setBankStatementImportsLoaded] = useState(false);
+  const [bankReconciliationDecisions, setBankReconciliationDecisions] = useState<
+    Record<string, BankReconciliationDecision>
+  >({});
+  const [bankReconciliationLoaded, setBankReconciliationLoaded] = useState(false);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(BANK_STATEMENT_IMPORTS_STORAGE_KEY);
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (Array.isArray(parsed)) setBankStatementImports(parsed as BankStatementImport[]);
+      }
+    } catch {
+      setBankStatementImports([]);
+    } finally {
+      setBankStatementImportsLoaded(true);
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(BANK_RECONCILIATION_STORAGE_KEY);
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          setBankReconciliationDecisions(parsed as Record<string, BankReconciliationDecision>);
+        }
+      }
+    } catch {
+      setBankReconciliationDecisions({});
+    } finally {
+      setBankReconciliationLoaded(true);
+    }
+  }, []);
   const [petty, setPetty] = useState<PettyEntry[]>(seedPetty);
   const [cashCount, dispatchCashCount] = useReducer(cashCountReducer, initialCashCount);
   const physicalCount = cashCount.saved.at(-1)?.total ?? null;
@@ -210,6 +252,32 @@ function useFinanceState() {
     payments,
     reminders,
     transactions,
+    bankStatementImports,
+    bankStatementImportsLoaded,
+    bankReconciliationDecisions,
+    bankReconciliationLoaded,
+    saveBankReconciliationDecision: (decision: BankReconciliationDecision): boolean => {
+      if (!bankReconciliationLoaded) return false;
+      const next = { ...bankReconciliationDecisions, [decision.statementId]: decision };
+      try {
+        window.localStorage.setItem(BANK_RECONCILIATION_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        return false;
+      }
+      setBankReconciliationDecisions(next);
+      return true;
+    },
+    addBankStatementImport: (statement: BankStatementImport): boolean => {
+      if (!bankStatementImportsLoaded || bankStatementImports.some((item) => item.id === statement.id)) return false;
+      const next = [...bankStatementImports, statement];
+      try {
+        window.localStorage.setItem(BANK_STATEMENT_IMPORTS_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        return false;
+      }
+      setBankStatementImports(next);
+      return true;
+    },
     petty,
     physicalCount,
     settlements,
@@ -765,7 +833,10 @@ function useFinanceState() {
       if (t.id)
         setTransactions((x) => x.map((o) => (o.id === t.id ? ({ ...o, ...t } as Transaction) : o)));
       else {
-        setTransactions((x) => [...x, { ...t, id: uid("T") }]);
+        const usedIds = new Set(transactions.map((transaction) => transaction.id));
+        let id = uid("T");
+        while (usedIds.has(id)) id = uid("T");
+        setTransactions((x) => [...x, { ...t, id }]);
         if (t.type === "income" && t.receiptNo) {
           setSettings((s) => ({ ...s, receipt: { ...s.receipt, next: s.receipt.next + 1 } }));
         }

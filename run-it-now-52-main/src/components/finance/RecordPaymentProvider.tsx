@@ -30,6 +30,7 @@ import {
   StatusBadge,
 } from "@/components/finance/common";
 import { useFinance } from "@/finance/store";
+import { displayInstallmentLabel } from "@/finance/types";
 import {
   allocatePayment,
   buildAdministrationDetailsPayload,
@@ -157,7 +158,7 @@ function RecordPaymentDialog({
           .map((allocation) => {
             const installment = person.plan.find((item) => item.id === allocation.installmentId);
             const wasOutstanding = installment ? installmentOutstanding(installment, payments) : 0;
-            return `${installment?.label ?? "Installment"} ${formatINR(allocation.amount)}${allocation.amount >= wasOutstanding ? " (settles it)" : ""}`;
+            return `${displayInstallmentLabel(installment?.label ?? "Installment")} ${formatINR(allocation.amount)}${allocation.amount >= wasOutstanding ? " (settles it)" : ""}`;
           })
           .join(" + ")
       : "Enter a valid amount to preview allocation.";
@@ -348,7 +349,7 @@ function RecordPaymentDialog({
                         ? formatDate(totals.nextDueInstallment.dueDate)
                         : "—"
                     }
-                    caption={totals.nextDueInstallment?.label ?? "No balance due"}
+                    caption={displayInstallmentLabel(totals.nextDueInstallment?.label ?? "No balance due")}
                   />
                 </StatGrid>
                 {sendDetailsPrompt && (
@@ -379,7 +380,7 @@ function RecordPaymentDialog({
                       <tbody>
                         {person.plan.map((installment) => (
                           <tr key={installment.id} className="border-b last:border-0">
-                            <td className="p-2">{installment.label}</td>
+                            <td className="p-2">{displayInstallmentLabel(installment.label)}</td>
                             <td className="whitespace-nowrap p-2">
                               {formatDate(installment.dueDate)}
                             </td>
@@ -485,7 +486,7 @@ function RecordPaymentDialog({
                                   value={item.id}
                                   disabled={installmentOutstanding(item, payments) === 0}
                                 >
-                                  {item.label}
+                                  {displayInstallmentLabel(item.label)}
                                 </SelectItem>
                               ))}
                             </SelectContent>

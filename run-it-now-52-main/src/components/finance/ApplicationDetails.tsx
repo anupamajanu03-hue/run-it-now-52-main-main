@@ -8,7 +8,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatINR } from "@/finance/logic";
+import { UserRound } from "lucide-react";
 import type { AdministrationDetailsSnapshot, Installment } from "@/finance/types";
+import { displayInstallmentLabel } from "@/finance/types";
 
 export function ApplicationDetail({ label, value }: { label: string; value: ReactNode }) {
   return (
@@ -33,27 +35,42 @@ export function ApplicationDetails({
         .filter((value) => typeof value === "string" && value.trim())
         .join(", ")
     : "";
-  const documents = [
-    ["Identity proof", details?.documents?.identityProof],
-    ["Academic records", details?.documents?.academicRecords],
-    ["Photograph", details?.documents?.photograph],
-    ["Resume", details?.documents?.resume],
-  ] as const;
   const educationRows =
     details?.educationWorkExperience
       ?.toString()
       .split(/\r?\n/)
       .filter((item) => item.length > 0) ?? [];
   const installmentPreference = details?.installmentPreference;
+  const age = (() => {
+    const birth = details?.dateOfBirth;
+    if (!birth || !/^\d{4}-\d{2}-\d{2}$/.test(birth)) return "Not provided";
+    const date = new Date(`${birth}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return "Not provided";
+    const now = new Date();
+    return String(now.getFullYear() - date.getFullYear() - (now < new Date(now.getFullYear(), date.getMonth(), date.getDate()) ? 1 : 0));
+  })();
+  const educationCells = (row: string) => {
+    const parts = row.replace(/^Education \d+:\s*/i, "").replace(/\.$/, "").split(",").map((part) => part.trim());
+    const year = parts.find((part) => /\b\d{4}(?:\s*[-–/]\s*\d{4})?\b/.test(part)) ?? "";
+    return [parts[0] ?? "", parts[1] ?? "", year, parts.slice(2).filter((part) => part !== year).join(", ")];
+  };
 
   return (
     <div className="space-y-6">
       <section className="space-y-3">
         <h3 className="font-semibold">1. Personal details</h3>
+        <div className="flex items-center gap-3">
+          {details?.passportPhoto?.previewUrl ? (
+            <img className="h-12 w-12 rounded-full object-cover" src={details.passportPhoto.previewUrl} alt="Applicant photo" />
+          ) : (
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground" aria-label="Photo not provided"><UserRound className="h-6 w-6" /></div>
+          )}
+          <span className="text-sm">{details?.passportPhoto ? details.passportPhoto.fileName : "Photo not provided"}</span>
+        </div>
         <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
           <ApplicationDetail label="Name" value={shown(snapshot.name)} />
           <ApplicationDetail label="Date of birth" value={shown(details?.dateOfBirth)} />
-          <ApplicationDetail label="Age" value="Not provided" />
+          <ApplicationDetail label="Age" value={age} />
           <ApplicationDetail label="Gender" value="Not provided" />
           <ApplicationDetail label="Mobile" value={shown(snapshot.contact)} />
           <ApplicationDetail label="Email" value={shown(snapshot.email)} />
@@ -74,13 +91,16 @@ export function ApplicationDetails({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Qualification / work experience</TableHead>
+              <TableHead>Qualification or role</TableHead>
+              <TableHead>Institute or company</TableHead>
+              <TableHead>Year of passing</TableHead>
+              <TableHead>Percent or grade</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {(educationRows.length > 0 ? educationRows : ["Not provided"]).map((row, index) => (
               <TableRow key={`${index}-${row}`}>
-                <TableCell className="whitespace-pre-wrap">{row}</TableCell>
+                {educationCells(row).map((cell, cellIndex) => <TableCell key={cellIndex}>{cell || "Not provided"}</TableCell>)}
               </TableRow>
             ))}
           </TableBody>
@@ -108,12 +128,12 @@ export function ApplicationDetails({
             label="Fee plan preferred"
             value={
               plan?.length
-                ? plan.map((installment) => installment.label).join(", ")
+                ? plan.map((installment) => displayInstallmentLabel(installment.label)).join(", ")
                 : "Not provided"
             }
           />
           <ApplicationDetail
-            label="Instalments"
+            label="Installments"
             value={
               installmentPreference === undefined
                 ? "Not provided"
@@ -133,14 +153,13 @@ export function ApplicationDetails({
       <section className="space-y-3">
         <h3 className="font-semibold">6. Documents enclosed</h3>
         <ul className="grid gap-2 text-sm sm:grid-cols-2">
-          {documents.map(([name, checked]) => (
+          {(details?.documents ?? []).map(({ type, fileName, provided }) => (
             <li
-              key={name}
-              className={`rounded-md border px-3 py-2 ${checked ? "" : "text-destructive"}`}
+              key={type}
+              className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
             >
-              {name}:{" "}
-              {checked === undefined ? "Not provided" : checked ? "Enclosed" : "Not provided"}
-              {!checked && checked !== undefined ? " (missing)" : ""}
+              <span>{type}: {provided ? fileName ?? "File provided" : "No file"}</span>
+              <span className="rounded-full border px-2 py-0.5 text-xs">{provided ? "Provided" : "Missing"}</span>
             </li>
           ))}
         </ul>
@@ -164,7 +183,7 @@ export function ApplicationDetails({
               <TableHead>Amount</TableHead>
               <TableHead>Method</TableHead>
               <TableHead>Receipt No.</TableHead>
-              <TableHead>Instalments covered</TableHead>
+              <TableHead>Installments covered</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -179,7 +198,7 @@ export function ApplicationDetails({
                   <TableCell className="whitespace-nowrap">{payment.receiptNo}</TableCell>
                   <TableCell>
                     {payment.installmentsCovered
-                      .map(({ label, amount }) => `${label} (${formatINR(amount)})`)
+                      .map(({ label, amount }) => `${displayInstallmentLabel(label)} (${formatINR(amount)})`)
                       .join(", ") || "Not provided"}
                   </TableCell>
                 </TableRow>
@@ -197,7 +216,7 @@ export function ApplicationDetails({
             value={formatINR(snapshot.paymentSummary.totalPaid)}
           />
           <ApplicationDetail
-            label="Instalments paid"
+            label="Installments paid"
             value={String(snapshot.paymentSummary.installmentsPaid)}
           />
           <ApplicationDetail

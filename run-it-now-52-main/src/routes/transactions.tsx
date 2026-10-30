@@ -64,7 +64,7 @@ function TransactionsPage() {
     e.type === view &&
     (cat === "all" || e.category === cat) &&
     (paymentMode === "all" || ("paymentMode" in e && e.paymentMode === paymentMode)) &&
-    (!q || `${e.description} ${e.reference}`.toLowerCase().includes(q.toLowerCase())));
+    (!q || `${e.id} ${e.description} ${e.reference} ${"bankReference" in e ? e.bankReference ?? "" : ""}`.toLowerCase().includes(q.toLowerCase())));
   const selectedEntries = ranged.filter((e) => e.type === view);
   const total = sum(selectedEntries.map((e) => e.amount));
   const ledgerOptions = view === "income" ? settings.incomeCategories : settings.expenseCategories;
@@ -105,7 +105,7 @@ function TransactionsPage() {
         {rows.length === 0 ? <EmptyState /> : (
           <Table>
             <TableHeader><TableRow>
-              <TableHead>Date</TableHead><TableHead>Description</TableHead><TableHead>Ledger Name</TableHead>
+              <TableHead>Date</TableHead><TableHead>Transaction ID</TableHead><TableHead>Description</TableHead><TableHead>Ledger Name</TableHead>
               <TableHead className="text-right">Amount</TableHead><TableHead>Method</TableHead><TableHead>Reference</TableHead>
               <TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
             </TableRow></TableHeader>
@@ -117,6 +117,9 @@ function TransactionsPage() {
                   rowLabel={`View transaction: ${e.description}`}
                 >
                   <TableCell className="whitespace-nowrap">{formatDate(e.date)}</TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-xs">
+                    {e.source === "txn" ? e.id : "—"}
+                  </TableCell>
                   <TableCell>{e.description}</TableCell>
                   <TableCell>{e.category}</TableCell>
                   <TableCell className={`num whitespace-nowrap text-right font-medium ${e.type === "income" ? "text-success" : "text-destructive"}`}>
@@ -161,7 +164,13 @@ function TransactionsPage() {
                 <h2 className="mb-4 border-b pb-3 text-center text-base font-semibold">Transaction details</h2>
                 <dl className="grid grid-cols-2 gap-3 text-sm">
                   {[
+                    ...(("source" in viewing && viewing.source === "txn")
+                      ? [["Transaction ID", viewing.id]]
+                      : []),
                     ["Receipt No.", ("receiptNo" in viewing && viewing.receiptNo) || viewing.reference || "—"],
+                    ...(("source" in viewing && viewing.source === "txn" && viewing.bankReference)
+                      ? [["Bank Reference / UTR No.", viewing.bankReference]]
+                      : []),
                     ["Date", formatDate(viewing.date)],
                     ["Type", viewing.type === "income" ? "Income" : "Expense"],
                     ["Ledger Name", viewing.category],
@@ -223,6 +232,7 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
     method: (txn?.method ?? "") as PaymentMethod | "",
     description: txn?.description ?? "",
     receiptNo: txn?.receiptNo ?? txn?.reference ?? (type === "income" ? nextIncomeReceiptNo() : nextExpenseReceiptNo()),
+    bankReference: txn?.bankReference ?? "",
     to: txn?.to ?? "",
     paymentMode: txn?.paymentMode ?? ("" as PaymentMode | ""),
   }));
@@ -264,6 +274,7 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
       id: txn?.id, type, date: f.date, amount: Number(f.amount), category: f.category, method: f.method as PaymentMethod,
       description: f.description.trim(), reference: f.receiptNo.trim(), status: txn?.status ?? "Posted",
       receiptNo: type === "income" ? f.receiptNo.trim() : undefined,
+      bankReference: f.bankReference.trim() ? f.bankReference : undefined,
       to: f.to.trim() || undefined,
       paymentMode: f.paymentMode as PaymentMode,
     });
@@ -288,6 +299,9 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
           <div className="grid min-w-0 grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2 lg:grid-cols-4">
             <Field label="Receipt No." htmlFor="t-receipt" error={errors['receiptNo']}>
               <Input id="t-receipt" value={f.receiptNo} readOnly aria-readonly="true" tabIndex={-1} />
+            </Field>
+            <Field label="Bank Reference / UTR No." htmlFor="t-bank-reference">
+              <Input id="t-bank-reference" value={f.bankReference} onChange={(e) => set("bankReference")(e.target.value)} />
             </Field>
             <Field label="Date" htmlFor="t-date" error={errors['date']}>
               <Input id="t-date" type="date" value={f.date} onChange={(e) => set("date")(e.target.value)} autoFocus />

@@ -6,6 +6,7 @@ import type {
   Installment,
   Person,
   Student,
+  StudentApplicationDetails,
 } from "@/finance/types";
 import {
   allocatePayment,
@@ -19,6 +20,8 @@ import {
   feeWorkflowPaymentStatus,
   hasDuplicatePaymentReference,
   canSendToAdministration,
+  applicationStage,
+  filterApplicationsByStage,
   classAccess,
   createDemoFeeWorkflow,
   createDemoBillingPayments,
@@ -107,6 +110,108 @@ function payment(installmentId: string, amount: number, date = "2026-10-02"): Fe
 }
 
 describe("installment-based fee workflow", () => {
+  it("filters existing application records by each derived stage", () => {
+    const workflow = createDemoFeeWorkflow(seedStudents, seedPayments);
+    const applications = workflow.persons.filter((item) => item.applicationDetails);
+    const stages = [
+      "To review",
+      "Awaiting payment",
+      "Ready to send",
+      "With Administration",
+      "Admitted",
+    ] as const;
+    const stageFor = (item: Person) =>
+      applicationStage(
+        item,
+        workflow.payments.filter((paymentItem) => paymentItem.personId === item.id),
+        workflow.handoffs,
+      );
+
+    expect(
+      filterApplicationsByStage(applications, workflow.payments, workflow.handoffs, "All"),
+    ).toEqual(applications);
+    for (const stage of stages) {
+      const filtered = filterApplicationsByStage(
+        applications,
+        workflow.payments,
+        workflow.handoffs,
+        stage,
+      );
+      expect(filtered.length).toBeGreaterThan(0);
+      expect(filtered).toEqual(applications.filter((item) => stageFor(item) === stage));
+    }
+    expect(
+      filterApplicationsByStage(applications, workflow.payments, workflow.handoffs, null).every(
+        (item) => stageFor(item) !== "Admitted",
+      ),
+    ).toBe(true);
+  });
+
+  it("derives application stages once for counts, filtered rows, and detail status", () => {
+    const toReview = person({ id: "review", applicationStatus: "Received" });
+    const awaitingPayment = person({ id: "awaiting", applicationStatus: "Reviewed" });
+    const readyToSend = person({ id: "ready", applicationStatus: "Reviewed" });
+    const withAdministration = person({ id: "sent", applicationStatus: "Reviewed" });
+    const admitted = person({ id: "admitted", admissionNo: "ADM-1" });
+    const payments = [
+      { ...payment("i1", 40), personId: awaitingPayment.id },
+      { ...payment("i1", 100), personId: readyToSend.id },
+      { ...payment("i1", 100), personId: withAdministration.id },
+    ];
+    const sent = recordAdministrationDetailsSent(
+      [],
+      withAdministration,
+      payments.filter((item) => item.personId === withAdministration.id),
+      "2026-10-02",
+    );
+    const people = [toReview, awaitingPayment, readyToSend, withAdministration, admitted];
+    const stageFor = (item: Person) =>
+      applicationStage(
+        item,
+        payments.filter((itemPayment) => itemPayment.personId === item.id),
+        sent,
+      );
+    const stages = people.map(stageFor);
+    const cardStages = [
+      "To review",
+      "Awaiting payment",
+      "Ready to send",
+      "With Administration",
+    ] as const;
+    const defaultRows = people.filter((item) => stageFor(item) !== "Admitted");
+    const cardCounts = cardStages.map((stage) => ({
+      stage,
+      count: people.filter((item) => stageFor(item) === stage).length,
+      rows: defaultRows.filter((item) => stageFor(item) === stage),
+    }));
+
+    expect(stages).toEqual([
+      "To review",
+      "Awaiting payment",
+      "Ready to send",
+      "With Administration",
+      "Admitted",
+    ]);
+    expect(cardCounts.map(({ count, rows }) => count - rows.length)).toEqual([0, 0, 0, 0]);
+    for (const [index, item] of people.entries()) {
+      const expectedStage = stages[index];
+      expect(stageFor(item)).toBe(expectedStage);
+      expect(
+        applicationStage(
+          item,
+          payments.filter((itemPayment) => itemPayment.personId === item.id),
+          sent,
+        ),
+      ).toBe(expectedStage);
+    }
+    expect(applicationStage(toReview, [], [], false)).toBe("Awaiting payment");
+    expect(
+      applicationStage(
+        person({ id: "later-installment-only" }),
+        [{ ...payment("i2", 100), personId: "later-installment-only" }],
+      ),
+    ).toBe("Awaiting payment");
+  });
   it("includes billed or paid applicants in Billing and previews only unnotified payments", () => {
     const billedPerson = person({ billCreated: true, admissionNo: "ADM2026-500" });
     const paid = { ...payment("i1", 40), adminNotified: true };
@@ -309,7 +414,7 @@ describe("installment-based fee workflow", () => {
     ).toBe(true);
     expect(
       DEMO_SCENARIO_PEOPLE.filter((item) => item.id !== "APP-P-129").every((item) =>
-        Object.values(item.applicationDetails?.documents ?? {}).some(Boolean),
+        item.applicationDetails?.documents.some((document) => document.provided),
       ),
     ).toBe(true);
     expect(
@@ -320,12 +425,8 @@ describe("installment-based fee workflow", () => {
       leadSource: "",
       addressLine1: "",
       declarationAccepted: false,
-      documents: {
-        identityProof: false,
-        academicRecords: false,
-        photograph: false,
-        resume: false,
-      },
+      documents: [{ type: "ID proof", provided: false }],
+      documentsEnclosed: [],
     });
     expect(billingStudents).toHaveLength(DEMO_BILLING_SCENARIO_PERSON_IDS.length + 1);
     expect(billingStudents.some((student) => student.id === "APP-P-003")).toBe(true);
@@ -608,8 +709,9 @@ describe("installment-based fee workflow", () => {
   });
 
   it("keeps a submitted application, payment plan, and admitted Billing record on one stable ID", () => {
-    const applicationDetails = {
+    const applicationDetails: StudentApplicationDetails = {
       dateOfBirth: "2004-03-14",
+      passportPhoto: { fileName: "passport-photo.png", previewUrl: "data:image/svg+xml,avatar" },
       addressLine1: "10 Sample Road",
       addressLine2: "Flat 2",
       city: "Bengaluru",
@@ -624,12 +726,8 @@ describe("installment-based fee workflow", () => {
       leadReference: "WEB-001",
       coursePreference: "Python",
       installmentPreference: 2,
-      documents: {
-        identityProof: true,
-        academicRecords: true,
-        photograph: false,
-        resume: true,
-      },
+      documents: [{ type: "ID proof", fileName: "id-proof.pdf", provided: true }, { type: "Address proof", provided: false }],
+      documentsEnclosed: ["ID proof"],
       declarationAccepted: true,
     };
     const submitted: Person = {
@@ -737,8 +835,9 @@ describe("installment-based fee workflow", () => {
   });
 
   describe("Administration details snapshot", () => {
-    const form = {
+    const form: StudentApplicationDetails = {
       dateOfBirth: "2004-02-01",
+      passportPhoto: { fileName: "passport-photo.png", previewUrl: "data:image/svg+xml,avatar" },
       addressLine1: "12 MG Road",
       addressLine2: "",
       city: "Pune",
@@ -753,7 +852,8 @@ describe("installment-based fee workflow", () => {
       leadReference: "Friend",
       coursePreference: "Python",
       installmentPreference: 2,
-      documents: { identityProof: true, academicRecords: true, photograph: false, resume: false },
+      documents: [{ type: "ID proof", fileName: "id-proof.pdf", provided: true }, { type: "TC", provided: false }],
+      documentsEnclosed: ["ID proof"],
       declarationAccepted: true,
     };
     const paid = {
@@ -769,6 +869,8 @@ describe("installment-based fee workflow", () => {
         paid,
       ]);
       expect(payload.applicationForm).toEqual(form);
+      expect(payload.applicationForm?.passportPhoto).toEqual(form.passportPhoto);
+      expect(payload.applicationForm?.documents).toEqual(form.documents);
       expect(payload.paymentSummary.totalPaid).toBe(150);
       expect(payload.paymentSummary.installmentsPaid).toBe(1);
       expect(payload.paymentSummary.outstanding).toBe(50);
@@ -815,6 +917,8 @@ describe("installment-based fee workflow", () => {
       expect(events[0]?.snapshot?.paymentSummary.totalPaid).toBe(150);
       form.city = "Changed";
       expect(events[0]?.snapshot?.applicationForm?.city).toBe("Pune");
+      expect(events[0]?.snapshot?.applicationForm?.passportPhoto).toEqual(form.passportPhoto);
+      expect(events[0]?.snapshot?.applicationForm?.documents).toEqual(form.documents);
       expect(isEligibleNow(applicant, [paid, later], twice)).toBe(false);
     });
   });

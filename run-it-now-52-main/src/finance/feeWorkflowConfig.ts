@@ -180,6 +180,7 @@ function completeDemoForm(
 
   return {
     dateOfBirth: `200${index % 5}-0${(index % 8) + 1}-14`,
+    passportPhoto: index === 2 ? undefined : { fileName: "passport-photo.png", previewUrl: `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#e5e7eb"/><circle cx="32" cy="24" r="12" fill="#9ca3af"/><path d="M10 62c2-15 10-22 22-22s20 7 22 22" fill="#9ca3af"/></svg>')}` },
     addressLine1: `Flat ${index + 1}, Sample Nagar`,
     addressLine2: `Block ${String.fromCharCode(65 + (index % 5))}`,
     city: "Demo City",
@@ -194,12 +195,14 @@ function completeDemoForm(
     leadReference: `${leadReference}-${index + 1}`,
     coursePreference: course,
     installmentPreference,
-    documents: {
-      identityProof: true,
-      academicRecords: index % 3 !== 0,
-      photograph: index % 2 === 0,
-      resume: index % 3 === 1,
-    },
+    documents: (["ID proof", "Address proof", "Latest marksheet", "TC"] as const).map((type, documentIndex) => {
+      const provided = (index + documentIndex) % 3 !== 0;
+      const fileName = ["id-proof.pdf", "address-proof.pdf", "latest-marksheet.pdf", "tc.pdf"][documentIndex]!;
+      return { type, provided, ...(provided ? { fileName } : {}) };
+    }),
+    documentsEnclosed: (["ID proof", "Address proof", "Latest marksheet", "TC"] as const)
+      .filter((_, documentIndex) => (index + documentIndex) % 3 !== 0)
+      .map((type) => type),
     declarationAccepted: true,
   };
 }
@@ -337,6 +340,7 @@ export const DEMO_SCENARIO_PEOPLE: Person[] = scenarioDefinitions.map((scenario,
   const applicationDetails = scenario.sparse
     ? {
         dateOfBirth: "",
+        passportPhoto: { fileName: "passport-photo.png", previewUrl: `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#e5e7eb"/><circle cx="32" cy="24" r="12" fill="#9ca3af"/><path d="M10 62c2-15 10-22 22-22s20 7 22 22" fill="#9ca3af"/></svg>')}` },
         addressLine1: "",
         addressLine2: "",
         city: "",
@@ -351,12 +355,8 @@ export const DEMO_SCENARIO_PEOPLE: Person[] = scenarioDefinitions.map((scenario,
         leadReference: "",
         coursePreference: scenario.course,
         installmentPreference: scenario.installments,
-        documents: {
-          identityProof: false,
-          academicRecords: false,
-          photograph: false,
-          resume: false,
-        },
+        documents: (["ID proof", "Address proof", "Latest marksheet", "TC"] as const).map((type) => ({ type, provided: false })),
+        documentsEnclosed: [],
         declarationAccepted: false,
       }
     : completeDemoForm(index, scenario.course, scenario.installments);
@@ -371,6 +371,9 @@ export const DEMO_SCENARIO_PEOPLE: Person[] = scenarioDefinitions.map((scenario,
     applicationId: `APP2026-${scenario.id}`,
     ...(scenario.admissionNo ? { admissionNo: scenario.admissionNo } : {}),
     applicationStatus: scenario.status,
+    ...(scenario.status !== "Received"
+      ? { accountantVerifiedAt: `${demoDate(scenario.appliedOffset + 2)}T10:00:00.000Z` }
+      : {}),
     admissionStatus: scenario.admissionNo ? "Admitted" : "Applicant",
     plan:
       scenario.id === 125
@@ -546,6 +549,7 @@ export function personFromStudent(student: Student, index: number): Person {
     admissionNo: admissionNo || undefined,
     applicationStatus: student.regNo ? "Admitted" : "Received",
     admissionStatus: student.regNo ? "Admitted" : "Applicant",
+    ...(student.regNo ? { accountantVerifiedAt: `${student.registeredOn}T10:00:00.000Z` } : {}),
     plan: student.installments.map((installment, installmentIndex) => ({
       id: `${student.id}-I${String(installmentIndex + 1).padStart(2, "0")}`,
       label: installment.label,
@@ -560,8 +564,11 @@ export function personFromStudent(student: Student, index: number): Person {
 }
 
 export function newDemoApplicants(): Person[] {
-  return DEMO_NEW_APPLICANTS.map((applicant) => ({
+  return DEMO_NEW_APPLICANTS.map((applicant, index) => ({
     ...applicant,
+    ...(applicant.applicationStatus !== "Received"
+      ? { accountantVerifiedAt: `${applicant.appliedOn}T10:00:00.000Z` }
+      : {}),
     admissionStatus: "Applicant" as const,
     plan: buildPlan(
       applicant.id,
@@ -573,5 +580,6 @@ export function newDemoApplicants(): Person[] {
       ],
     ),
     adminNotifiedOfClearance: false,
+    applicationDetails: completeDemoForm(index + 10, applicant.course, 2),
   }));
 }

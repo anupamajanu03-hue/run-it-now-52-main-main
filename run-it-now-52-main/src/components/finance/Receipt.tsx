@@ -23,7 +23,7 @@ import { amountInWords, formatDate, formatINR } from "@/finance/logic";
 import { studentCourse } from "@/finance/courses";
 import { receiptFigures } from "@/finance/receipt";
 import type { FeeWorkflowPayment } from "@/finance/types";
-import { PAYMENT_TOWARDS, type FeePayment, type PaymentMethod } from "@/finance/types";
+import { displayInstallmentLabel, PAYMENT_TOWARDS, type FeePayment, type PaymentMethod } from "@/finance/types";
 
 const MODES: { label: string; methods: PaymentMethod[] }[] = [
   { label: "Cash", methods: ["Cash"] },
@@ -131,7 +131,7 @@ export function Receipt({
         <Row label="Payment towards">
           <span className="receipt-options">
             {PAYMENT_TOWARDS.map((t) => (
-              <Box key={t} label={t} checked={payment.towards === t} />
+              <Box key={t} label={displayInstallmentLabel(t)} checked={payment.towards === t} />
             ))}
             {payment.towards === "Other" && payment.towardsOther ? (
               <span>: {payment.towardsOther}</span>
@@ -274,7 +274,7 @@ function WorkflowReceipt({
         <Row label="Installment(s) covered">
           <span>
             {covered
-              .map((allocation) => `${allocation.label}: ${formatINR(allocation.amount)}`)
+              .map((allocation) => `${displayInstallmentLabel(allocation.label)}: ${formatINR(allocation.amount)}`)
               .join(" · ") || "—"}
           </span>
         </Row>
@@ -283,7 +283,7 @@ function WorkflowReceipt({
         </Row>
         <Row label="Next installment due">
           {figures.nextDueInstallment
-            ? `${figures.nextDueInstallment.label} · ${formatDate(figures.nextDueInstallment.dueDate)}`
+            ? `${displayInstallmentLabel(figures.nextDueInstallment.label)} · ${formatDate(figures.nextDueInstallment.dueDate)}`
             : "—"}
         </Row>
         <div className="receipt-signs">

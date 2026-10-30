@@ -84,6 +84,7 @@ describe("book statement calculations", () => {
 
     const bank = buildBookStatement(entries, "bank", "2026-10-01", "2026-10-31");
     expect(bank.rows.map((row) => row.id)).toEqual(["bank-income"]);
+    expect(bank.rows[0]).toMatchObject({ id: "bank-income", reference: "RCPT-2" });
     expect(bank.totalReceived).toBe(60);
     expect(bank.totalPaid).toBe(0);
   });

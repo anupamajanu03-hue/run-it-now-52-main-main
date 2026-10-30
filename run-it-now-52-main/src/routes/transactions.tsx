@@ -38,7 +38,8 @@ export const Route = createFileRoute("/transactions")({
   component: TransactionsPage,
 });
 
-const entryDocumentNumber = (entry: LedgerEntry) => entry.receiptNo || entry.reference || "—";
+const entryDocumentNumber = (entry: LedgerEntry) =>
+  entry.type === "income" ? entry.receiptNo || entry.reference || "—" : "";
 const entryPaymentReference = (entry: LedgerEntry) => {
   if (entry.method === "Cash") return "—";
   return (entry.source === "fee" ? entry.reference : entry.bankReference) || "—";
@@ -71,7 +72,7 @@ function TransactionsPage() {
     e.type === view &&
     (cat === "all" || e.category === cat) &&
     (paymentMode === "all" || ("paymentMode" in e && e.paymentMode === paymentMode)) &&
-    (!q || `${e.description} ${e.category} ${entryDocumentNumber(e)} ${entryPaymentReference(e)}`
+    (!q || `${e.description} ${e.category} ${e.type === "income" ? entryDocumentNumber(e) : ""} ${entryPaymentReference(e)}`
       .toLowerCase().includes(q.toLowerCase())));
   const selectedEntries = ranged.filter((e) => e.type === view);
   const total = sum(selectedEntries.map((e) => e.amount));
@@ -104,7 +105,7 @@ function TransactionsPage() {
       </StatGrid>
       <SectionCard>
         <FilterBar>
-          <SearchBox value={q} onChange={setQ} placeholder="Search description, ledger name, receipt, voucher or reference" />
+          <SearchBox value={q} onChange={setQ} placeholder="Search description, ledger, receipt or reference" />
           <DateRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
           <FilterSelect label="Ledger Name" allLabel="All ledger names" value={cat} onChange={setCat} options={ledgerOptions} />
           <FilterSelect label="Payment modes" value={paymentMode} onChange={setPaymentMode}
@@ -114,7 +115,7 @@ function TransactionsPage() {
           <Table className="table-fixed">
             <colgroup>
               <col className="w-[100px]" />
-              <col className="w-[140px]" />
+              {view === "income" && <col className="w-[140px]" />}
               <col />
               <col className="w-[132px]" />
               <col className="w-[116px]" />
@@ -125,7 +126,7 @@ function TransactionsPage() {
             </colgroup>
             <TableHeader><TableRow>
               <TableHead className="whitespace-nowrap">Date</TableHead>
-              <TableHead className="whitespace-nowrap">{view === "income" ? "Receipt No." : "Voucher No."}</TableHead>
+              {view === "income" && <TableHead className="whitespace-nowrap">Receipt No.</TableHead>}
               <TableHead>Description</TableHead><TableHead>Ledger Name</TableHead>
               <TableHead className="whitespace-nowrap text-right">Amount</TableHead>
               <TableHead className="whitespace-nowrap">Method</TableHead>
@@ -141,7 +142,9 @@ function TransactionsPage() {
                   rowLabel={`View transaction: ${e.description}`}
                 >
                   <TableCell className="whitespace-nowrap">{formatDate(e.date)}</TableCell>
-                  <TableCell className="whitespace-nowrap font-mono text-xs">{entryDocumentNumber(e)}</TableCell>
+                  {view === "income" && (
+                    <TableCell className="whitespace-nowrap font-mono text-xs">{entryDocumentNumber(e)}</TableCell>
+                  )}
                   <TableCell>{e.description}</TableCell>
                   <TableCell>{e.category}</TableCell>
                   <TableCell className={`num whitespace-nowrap text-right font-medium ${e.type === "income" ? "text-success" : "text-destructive"}`}>
@@ -186,10 +189,7 @@ function TransactionsPage() {
                 <h2 className="mb-4 border-b pb-3 text-center text-base font-semibold">Transaction details</h2>
                 <dl className="grid grid-cols-2 gap-3 text-sm">
                   {[
-                    ["Receipt No.", ("receiptNo" in viewing && viewing.receiptNo) || viewing.reference || "—"],
-                    ...(("source" in viewing && viewing.source === "txn" && viewing.bankReference)
-                      ? [["Bank Reference / UTR No.", viewing.bankReference]]
-                      : []),
+                    ...(viewing.type === "income" ? [["Receipt No.", entryDocumentNumber(viewing)]] : []),
                     ["Date", formatDate(viewing.date)],
                     ["Type", viewing.type === "income" ? "Income" : "Expense"],
                     ["Ledger Name", viewing.category],
@@ -328,9 +328,11 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
         <DialogHeader><DialogTitle>{txn ? "Edit" : "Add"} {type === "income" ? "income" : "expense"}</DialogTitle></DialogHeader>
         <form onSubmit={submit} onKeyDown={onEnterKeyDown} className="flex min-h-0 flex-col gap-3">
           <div className="grid min-w-0 grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2 lg:grid-cols-4">
-            <Field label={type === "income" ? "Receipt No." : "Voucher No."} htmlFor="t-receipt" error={errors['receiptNo']}>
-              <Input id="t-receipt" value={f.receiptNo} readOnly aria-readonly="true" tabIndex={-1} />
-            </Field>
+            {type === "income" && (
+              <Field label="Receipt No." htmlFor="t-receipt" error={errors['receiptNo']}>
+                <Input id="t-receipt" value={f.receiptNo} readOnly aria-readonly="true" tabIndex={-1} />
+              </Field>
+            )}
             {paymentReferenceState.rule && (
               <Field label={paymentReferenceState.label} htmlFor="t-bank-reference" error={paymentReferenceState.error}>
                 <Input id="t-bank-reference" value={f.bankReference}

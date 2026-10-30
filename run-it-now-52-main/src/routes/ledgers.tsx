@@ -30,6 +30,50 @@ export const Route = createFileRoute("/ledgers")({
 
 const LABEL: Record<string, string> = { cash: "Cash Book", bank: "Bank Book", general: "General Ledger" };
 
+const bookReceiptNumber = (entry: LedgerEntry) =>
+  entry.type === "income" ? entry.receiptNo || "—" : "—";
+
+function bankPaymentReferences(entries: LedgerEntry[]) {
+  const used = new Set(
+    entries
+      .filter((entry) => !isCash(entry.method))
+      .map((entry) => ("bankReference" in entry ? entry.bankReference : entry.reference)?.trim().toLowerCase())
+      .filter((reference): reference is string => !!reference),
+  );
+  const missing = entries
+    .filter((entry) => !isCash(entry.method) && !used.has(
+      ("bankReference" in entry ? entry.bankReference : entry.reference)?.trim().toLowerCase() ?? "",
+    ))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  let transferSequence = Math.max(218, ...[...used].map((reference) =>
+    Number(reference.match(/^txn8802(\d+)$/)?.[1] ?? 0),
+  )) + 1;
+  let chequeSequence = Math.max(0, ...[...used].map((reference) =>
+    Number(/^\d{6}$/.test(reference) ? reference : 0),
+  )) + 1;
+  let cardSequence = 1;
+  let otherSequence = 1;
+  const generated = new Map<string, string>();
+
+  for (const entry of missing) {
+    let reference: string;
+    do {
+      if (entry.method === "UPI" || entry.method === "Bank Transfer") {
+        reference = `TXN8802${String(transferSequence++).padStart(2, "0")}`;
+      } else if (entry.method === "Cheque") {
+        reference = String(chequeSequence++).padStart(6, "0");
+      } else if (entry.method === "Debit Card" || entry.method === "Credit Card" || entry.method === "Card") {
+        reference = `C${String(cardSequence++).padStart(5, "0")}`;
+      } else {
+        reference = `R${String(otherSequence++).padStart(5, "0")}`;
+      }
+    } while (used.has(reference.toLowerCase()));
+    used.add(reference.toLowerCase());
+    generated.set(entry.id, reference);
+  }
+  return generated;
+}
+
 function LedgersPage() {
   const { tab = "cash" } = Route.useSearch();
   const navigate = Route.useNavigate();
@@ -77,6 +121,11 @@ export function Book({ kind, entries, q, setQ, from, to, setRange, account, setA
   const filtered = scope.filter(matchAcc).sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
   const signed = (e: LedgerEntry) => (e.type === "income" ? e.amount : -e.amount);
   const bookStatement = kind === "general" ? null : buildBookStatement(entries, kind, from, to);
+  const generatedPaymentReferences = kind === "bank" ? bankPaymentReferences(entries) : null;
+  const paymentReference = (entry: LedgerEntry) =>
+    ("bankReference" in entry ? entry.bankReference : entry.reference)?.trim() ||
+    generatedPaymentReferences?.get(entry.id) ||
+    "—";
   const opening = bookStatement?.opening ?? (kind === "general"
     ? filtered.filter((e) => e.date < from).reduce((a, e) => a + signed(e), 0)
     : 0);
@@ -85,9 +134,13 @@ export function Book({ kind, entries, q, setQ, from, to, setRange, account, setA
     result.push({ ...entry, balance: previousBalance + signed(entry) });
     return result;
   }, []);
-  const rows = calculatedRows.filter((e) =>
-    !q || `${e.id} ${e.description} ${e.reference} ${"bankReference" in e ? e.bankReference ?? "" : ""} ${e.category}`.toLowerCase().includes(q.toLowerCase()),
-  );
+  const rows = calculatedRows.filter((e) => {
+    if (!q) return true;
+    const searchable = kind === "general"
+      ? `${e.id} ${e.description} ${e.reference} ${"bankReference" in e ? e.bankReference ?? "" : ""} ${e.category}`
+      : `${e.description} ${e.category} ${bookReceiptNumber(e)} ${kind === "bank" ? paymentReference(e) : ""}`;
+    return searchable.toLowerCase().includes(q.toLowerCase());
+  });
   const closing = bookStatement?.closing ?? calculatedRows.at(-1)?.balance ?? opening;
   const generalSummary = kind === "general" ? ledgers.map((ledger) => {
     const ledgerEntries = scope.filter((entry) => entry.category === ledger);
@@ -127,7 +180,8 @@ export function Book({ kind, entries, q, setQ, from, to, setRange, account, setA
       </StatGrid>
       <SectionCard>
         <FilterBar>
-          <SearchBox value={q} onChange={setQ} placeholder="Search ledger name or entries" />
+          <SearchBox value={q} onChange={setQ}
+            placeholder={kind === "general" ? "Search ledger name or entries" : "Search particulars, ledger, receipt or reference"} />
           <DateRange from={from} to={to} onChange={setRange} />
           {kind === "general"
             ? <FilterSelect label="Ledgers" all="All" value={account} onChange={setAccount} options={ledgers} />
@@ -161,32 +215,81 @@ export function Book({ kind, entries, q, setQ, from, to, setRange, account, setA
             </TableBody>
           </Table>
         ) : rows.length === 0 ? <EmptyState /> : (
-          <Table>
+          <Table className={kind === "general" ? undefined : "table-fixed"}>
+            {kind !== "general" && (
+              <colgroup>
+                {kind === "cash" ? <>
+                  <col className="w-[96px]" />
+                  <col className="w-[220px]" />
+                  <col className="w-[180px]" />
+                  <col className="w-[130px]" />
+                  <col className="w-[130px]" />
+                  <col className="w-[130px]" />
+                  <col className="w-[150px]" />
+                </> : <>
+                  <col className="w-[96px]" />
+                  <col className="w-[240px]" />
+                  <col className="w-[140px]" />
+                  <col className="w-[140px]" />
+                  <col className="w-[180px]" />
+                  <col className="w-[110px]" />
+                  <col className="w-[110px]" />
+                  <col className="w-[120px]" />
+                </>}
+              </colgroup>
+            )}
             <TableHeader><TableRow>
-              <TableHead>Date</TableHead>
-              <TableHead>Transaction ID</TableHead>
+              <TableHead className={kind === "general" ? undefined : "whitespace-nowrap"}>Date</TableHead>
+              {kind === "general" && <TableHead>Transaction ID</TableHead>}
               {kind === "general" && <TableHead>Ledger Name</TableHead>}
-              <TableHead>Particulars</TableHead>
-              <TableHead>{kind === "bank" ? "Type" : kind === "cash" ? "Ledger Name" : "Payment Mode"}</TableHead>
-              <TableHead>{kind === "general" ? "Reference" : "Receipt No."}</TableHead>
-              <TableHead className="text-right">Debit</TableHead><TableHead className="text-right">Credit</TableHead><TableHead className="text-right">Balance</TableHead>
+              {kind !== "bank" && <TableHead className={kind === "general" ? undefined : "whitespace-nowrap"}>Particulars</TableHead>}
+              {kind === "bank" && <TableHead className="whitespace-nowrap">Particulars</TableHead>}
+              {kind === "cash" && <TableHead className="whitespace-nowrap">Ledger Name</TableHead>}
+              {kind === "bank" && <TableHead className="whitespace-nowrap">Type</TableHead>}
+              {kind === "general" && <TableHead>Payment Mode</TableHead>}
+              {kind === "bank" && <TableHead className="whitespace-nowrap">Receipt No.</TableHead>}
+              {kind === "bank" && <TableHead className="whitespace-nowrap">Payment ref.</TableHead>}
+              {kind === "general" && <TableHead className={kind === "general" ? undefined : "whitespace-nowrap"}>{"Reference"}</TableHead>}
+              <TableHead className={kind === "general" ? "text-right" : "whitespace-nowrap text-right"}>Debit</TableHead>
+              <TableHead className={kind === "general" ? "text-right" : "whitespace-nowrap text-right"}>Credit</TableHead>
+              <TableHead className={kind === "general" ? "text-right" : "whitespace-nowrap text-right"}>Balance</TableHead>
             </TableRow></TableHeader>
             <TableBody>
               {rows.map((e) => (
                 <TableRow key={e.id} onRowClick={() => setViewing(e)} rowLabel={`View ledger entry: ${e.description}`}>
                   <TableCell className="whitespace-nowrap">{formatDate(e.date)}</TableCell>
-                  <TableCell className="max-w-36 break-all font-mono text-xs">{e.id}</TableCell>
+                  {kind === "general" && <TableCell className="max-w-36 break-all font-mono text-xs">{e.id}</TableCell>}
                   {kind === "general" && <TableCell>{e.category}</TableCell>}
-                  <TableCell>{e.description}</TableCell>
-                  <TableCell>{kind === "bank" ? `${e.type === "income" ? "Deposit" : "Withdrawal"} · ${e.method}` : kind === "cash" ? e.category : e.method}</TableCell>
-                  <TableCell className="num text-xs">
-                    {kind === "general"
-                      ? e.reference || "—"
-                      : e.receiptNo || (e.source === "txn" ? e.reference : "") || "—"}
+                  {kind === "bank" ? (
+                    <>
+                      <TableCell className="whitespace-normal break-words align-top">{e.description}</TableCell>
+                      <TableCell className="whitespace-normal break-words align-top">{`${e.type === "income" ? "Deposit" : "Withdrawal"} · ${e.method}`}</TableCell>
+                      <TableCell className="num whitespace-nowrap text-xs">{bookReceiptNumber(e)}</TableCell>
+                      <TableCell className="num whitespace-normal break-all text-xs">{paymentReference(e)}</TableCell>
+                    </>
+                  ) : (
+                    <>
+                      <TableCell className={kind === "general" ? undefined : "truncate"}>{e.description}</TableCell>
+                      {kind !== "general" && <TableCell className="truncate">{e.category}</TableCell>}
+                      {kind === "general" && <TableCell>{e.method}</TableCell>}
+                      <TableCell className={kind === "general" ? "num text-xs" : "num whitespace-nowrap text-xs"}>
+                        {kind === "general"
+                          ? e.reference || "—"
+                          : bookReceiptNumber(e)}
+                      </TableCell>
+                    </>
+                  )}
+                  {kind === "general" && <TableCell>{e.method}</TableCell>}
+                  {kind === "general" && <TableCell className="num text-xs">{e.reference || "—"}</TableCell>}
+                  <TableCell className={kind === "general" ? "num text-right" : "num whitespace-nowrap text-right"}>
+                    {e.type === "income" ? formatINR(e.amount) : ""}
                   </TableCell>
-                  <TableCell className="num text-right">{e.type === "income" ? formatINR(e.amount) : ""}</TableCell>
-                  <TableCell className="num text-right">{e.type === "expense" ? formatINR(e.amount) : ""}</TableCell>
-                  <TableCell className="num text-right font-medium">{formatINR(e.balance)}</TableCell>
+                  <TableCell className={kind === "general" ? "num text-right" : "num whitespace-nowrap text-right"}>
+                    {e.type === "expense" ? formatINR(e.amount) : ""}
+                  </TableCell>
+                  <TableCell className={kind === "general" ? "num text-right font-medium" : "num whitespace-nowrap text-right font-medium"}>
+                    {formatINR(e.balance)}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -196,7 +299,10 @@ export function Book({ kind, entries, q, setQ, from, to, setRange, account, setA
       <Dialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)}>
         <DialogContent>
           <DialogHeader><DialogTitle>Ledger entry details</DialogTitle></DialogHeader>
-          {viewing && <LedgerDetails entry={viewing} kind={kind} />}
+          {viewing && (
+            <LedgerDetails entry={viewing} kind={kind}
+              paymentReference={kind === "bank" ? paymentReference(viewing) : undefined} />
+          )}
           <DialogFooter><Button variant="outline" onClick={() => setViewing(null)}>Close</Button></DialogFooter>
         </DialogContent>
       </Dialog>
@@ -204,8 +310,12 @@ export function Book({ kind, entries, q, setQ, from, to, setRange, account, setA
   );
 }
 
-function LedgerDetails({ entry, kind }: { entry: LedgerEntry & { balance: number }; kind: "cash" | "bank" | "general" }) {
-  const fields: [string, string | undefined][] = [
+function LedgerDetails({ entry, kind, paymentReference }: {
+  entry: LedgerEntry & { balance: number };
+  kind: "cash" | "bank" | "general";
+  paymentReference?: string | undefined;
+}) {
+  const fields: [string, string | undefined][] = kind === "general" ? [
     ["Date", formatDate(entry.date)], ["Particulars", entry.description], ["Ledger Name", entry.category],
     ["Transaction ID", entry.id],
     ...(entry.source === "txn" && entry.bankReference
@@ -218,10 +328,22 @@ function LedgerDetails({ entry, kind }: { entry: LedgerEntry & { balance: number
       "Receipt No.",
       entry.receiptNo ?? (entry.source === "txn" ? entry.reference : undefined),
     ],
-    ["Account", kind === "cash" ? "Cash" : kind === "bank" ? "Bank" : undefined], ["Payment method", entry.method],
+    ["Account", undefined], ["Payment method", entry.method],
     ["Payment mode", "paymentMode" in entry ? entry.paymentMode : undefined], ["To", "to" in entry ? entry.to : undefined],
     ["Description", entry.description], ["Status", entry.status], ["Debit", entry.type === "expense" ? formatINR(entry.amount) : undefined],
     ["Credit", entry.type === "income" ? formatINR(entry.amount) : undefined], ["Balance after entry", formatINR(entry.balance)],
+    ["Source", entry.source === "fee" ? "Fee Collection" : "Daily Transactions"],
+  ] : [
+    ["Date", formatDate(entry.date)], ["Particulars", entry.description], ["Ledger Name", entry.category],
+    ["Type", entry.type === "income" ? "Income" : "Expense"],
+    ["Receipt No.", bookReceiptNumber(entry)],
+    ["Payment ref.", kind === "bank" ? paymentReference || "—" : undefined],
+    ["Account", kind === "cash" ? "Cash" : "Bank"], ["Payment method", entry.method],
+    ["Payment mode", "paymentMode" in entry ? entry.paymentMode : undefined], ["To", "to" in entry ? entry.to : undefined],
+    ["Description", entry.description], ["Status", entry.status],
+    ["Debit", entry.type === "expense" ? formatINR(entry.amount) : undefined],
+    ["Credit", entry.type === "income" ? formatINR(entry.amount) : undefined],
+    ["Balance after entry", formatINR(entry.balance)],
     ["Source", entry.source === "fee" ? "Fee Collection" : "Daily Transactions"],
   ];
   return <dl className="grid grid-cols-2 gap-3 text-sm">{fields.filter(([, value]) => value !== undefined && value !== "").map(([label, value]) =>

@@ -5,7 +5,13 @@ import { installmentSchedule, studentPaid, sum, TODAY } from "./logic";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-export const PAYMENT_REFERENCE_METHODS = ["UPI", "Bank Transfer", "Cheque"] as const;
+export const PAYMENT_REFERENCE_METHODS = [
+  "UPI",
+  "Bank Transfer",
+  "Cheque",
+  "Debit Card",
+  "Credit Card",
+] as const;
 export type PaymentReferenceMethod = (typeof PAYMENT_REFERENCE_METHODS)[number];
 
 export function getPaymentReferenceRule(method: PaymentMethod | "") {
@@ -28,6 +34,13 @@ export function getPaymentReferenceRule(method: PaymentMethod | "") {
         label: "Cheque no.",
         helperText: "The 6-digit number printed on the cheque",
       } as const;
+    case "Debit Card":
+    case "Credit Card":
+      return {
+        method,
+        label: "Card approval code / RRN",
+        helperText: "The approval code or retrieval reference number",
+      } as const;
     default:
       return null;
   }
@@ -38,10 +51,12 @@ export function getPaymentReferenceState({
   reference,
   personId,
   recordedPayments,
+  duplicateError = "This reference is already used for another payment.",
 }: {
   method: PaymentMethod | "";
   reference: string;
   personId?: string;
+  duplicateError?: string;
   recordedPayments?: Array<{
     personId?: string | null;
     method: PaymentMethod;
@@ -74,7 +89,7 @@ export function getPaymentReferenceState({
         payment.reference.trim().toLowerCase() === normalizedReference.toLowerCase(),
     )
   ) {
-    error = "This reference is already used for another payment.";
+    error = duplicateError;
   }
 
   return {

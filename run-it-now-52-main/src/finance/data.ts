@@ -1,4 +1,4 @@
-import type { FeePayment, PettyEntry, Settlement, Student, Transaction } from "./types";
+import type { FeePayment, PaymentMethod, PettyEntry, Settlement, Student, Transaction } from "./types";
 import { seedCourses } from "./courses";
 
 export const INCOME_CATEGORIES = [
@@ -55,7 +55,7 @@ add({ type: "income", date: "2026-10-15", description: "Exam fees – supplement
 add({ type: "income", date: "2026-10-16", description: "Exam fees – revaluation", category: "Exam Fees", amount: 4200, method: "UPI", reference: "EXM-1016", status: "Pending" });
 add({ type: "expense", date: "2026-10-14", description: "Printer cartridges", category: "Stationery", amount: 6400, method: "Cash", reference: "STN-1014", status: "Pending" });
 const sampleTransactions: (Omit<Transaction, "id" | "status"> & { status?: Transaction["status"] })[] = [
-  ["income", "2026-04-08", "Application Fees", "Nisha Rao", "Application form sales â€“ April", "Cash", "Full Payment", 1200, "RCP-2026-1020"],
+  ["income", "2026-04-08", "Application Fees", "Nisha Rao", "Application form sales \u2013 April", "Cash", "Full Payment", 1200, "RCP-2026-1020"],
   ["income", "2026-08-19", "Application Fees", "Admissions Desk", "Application forms for walk-in applicants", "UPI", "Full Payment", 2400, "RCP-2026-1021"],
   ["income", "2026-05-14", "Administration Fees", "Rahul Mehta", "Admission administration charge", "Bank Transfer", "Full Payment", 3500, "RCP-2026-1022"],
   ["income", "2026-09-03", "Administration Fees", "Office Administration", "Document processing and verification charge", "Debit Card", "Full Payment", 2800, "RCP-2026-1023"],
@@ -63,13 +63,13 @@ const sampleTransactions: (Omit<Transaction, "id" | "status"> & { status?: Trans
   ["income", "2026-10-11", "Penalties & Fines", "Exam Office", "Late examination registration fee", "UPI", "Full Payment", 1500, "RCP-2026-1025", "Pending"],
   ["income", "2026-07-17", "Miscellaneous Income", "Ravi Kumar", "Sale of used campus publications", "Credit Card", "Full Payment", 950, "RCP-2026-1026"],
   ["income", "2026-10-06", "Miscellaneous Income", "Alumni Association", "Replacement identity card and document copies", "Cheque", "Partial Payment", 1800, "RCP-2026-1027"],
-  ["expense", "2026-04-30", "Staff Salaries", "College Payroll Account", "Monthly staff salaries â€“ April", "Bank Transfer", "Full Payment", 425000, "EXP-2026-0001"],
-  ["expense", "2026-09-30", "Staff Salaries", "College Payroll Account", "Monthly staff salaries â€“ September", "Bank Transfer", "Full Payment", 445000, "EXP-2026-0002"],
+  ["expense", "2026-04-30", "Staff Salaries", "College Payroll Account", "Monthly staff salaries \u2013 April", "Bank Transfer", "Full Payment", 425000, "EXP-2026-0001"],
+  ["expense", "2026-09-30", "Staff Salaries", "College Payroll Account", "Monthly staff salaries \u2013 September", "Bank Transfer", "Full Payment", 445000, "EXP-2026-0002"],
   ["expense", "2026-05-21", "Events Expenses", "Celebration Decorators", "Stage and hall decoration for annual day", "Cash", "Full Payment", 18500, "EXP-2026-0003"],
   ["expense", "2026-09-04", "Events Expenses", "Campus Caterers", "Hall setup and refreshments for Teachers' Day", "UPI", "Partial Payment", 22400, "EXP-2026-0004"],
   ["expense", "2026-04-18", "Printing & Stationery", "Bright Print House", "Printing of college prospectus", "Cheque", "Full Payment", 12800, "EXP-2026-0005"],
   ["expense", "2026-08-12", "Printing & Stationery", "Metro Office Supplies", "Registers, paper and examination stationery", "Debit Card", "Full Payment", 6700, "EXP-2026-0006"],
-  ["expense", "2026-05-06", "Electricity & Water Charges", "Bengaluru Electricity Supply", "Monthly electricity bill â€“ May", "Bank Transfer", "Full Payment", 46200, "EXP-2026-0007"],
+  ["expense", "2026-05-06", "Electricity & Water Charges", "Bengaluru Electricity Supply", "Monthly electricity bill \u2013 May", "Bank Transfer", "Full Payment", 46200, "EXP-2026-0007"],
   ["expense", "2026-10-05", "Electricity & Water Charges", "Bengaluru Water Board", "Campus water and utility charges", "UPI", "Full Payment", 18400, "EXP-2026-0008"],
   ["expense", "2026-06-10", "Telephone & Internet Charges", "FiberNet Business", "Monthly campus internet connection", "Credit Card", "Full Payment", 5800, "EXP-2026-0009"],
   ["expense", "2026-09-10", "Telephone & Internet Charges", "Airtel Business", "Office telephone and data plan", "Bank Transfer", "Full Payment", 3900, "EXP-2026-0010"],
@@ -88,7 +88,6 @@ const sampleTransactions: (Omit<Transaction, "id" | "status"> & { status?: Trans
   reference: receiptNo, receiptNo, ...(status ? { status } : {}),
 } as unknown as Omit<Transaction, "id" | "status"> & { status?: Transaction["status"] }));
 sampleTransactions.forEach((t) => add(t));
-export const seedTransactions = txns;
 
 const course = (name: string) => {
   const match = seedCourses.find((item) => item.name === name);
@@ -184,6 +183,63 @@ const paymentRows: Omit<FeePayment, "id">[] = [
   { studentId: "S032", date: "2026-10-15", amount: 2000, method: "UPI", reference: "TXN880243", receiptNo: "RCP-2026-1062" },
 ];
 export const seedPayments: FeePayment[] = paymentRows.map((payment, index) => ({ ...payment, id: `P${String(index + 1).padStart(3, "0")}` }));
+
+const usedReceiptNumbers = new Set([
+  ...txns.map((transaction) => transaction.receiptNo),
+  ...paymentRows.map((payment) => payment.receiptNo),
+].filter((receiptNo): receiptNo is string => !!receiptNo));
+const usedPaymentReferences = new Set([
+  ...paymentRows.map((payment) => payment.reference),
+  ...txns.map((transaction) => transaction.bankReference ?? ""),
+].filter(Boolean));
+let nextReceiptSequence = Math.max(0, ...[...usedReceiptNumbers]
+  .map((receiptNo) => Number(receiptNo.match(/^RCP-2026-(\d+)$/)?.[1] ?? 0))) + 1;
+let nextTransferSequence = Math.max(0, ...[...usedPaymentReferences]
+  .map((reference) => Number(reference.match(/^TXN8802(\d{2})$/)?.[1] ?? 0))) + 1;
+let nextChequeSequence = Math.max(0, ...[...usedPaymentReferences]
+  .map((reference) => Number(/^\d{6}$/.test(reference) ? reference : 0))) + 1;
+let nextCardSequence = 1;
+
+const nextIncomeReceiptNo = () => {
+  let receiptNo = `RCP-2026-${String(nextReceiptSequence++).padStart(4, "0")}`;
+  while (usedReceiptNumbers.has(receiptNo)) {
+    receiptNo = `RCP-2026-${String(nextReceiptSequence++).padStart(4, "0")}`;
+  }
+  usedReceiptNumbers.add(receiptNo);
+  return receiptNo;
+};
+
+const nextPaymentReference = (method: PaymentMethod) => {
+  let reference: string;
+  if (method === "UPI" || method === "Bank Transfer") {
+    reference = `TXN8802${String(nextTransferSequence++).padStart(2, "0")}`;
+  } else if (method === "Cheque") {
+    reference = String(nextChequeSequence++).padStart(6, "0");
+  } else {
+    reference = `C${String(nextCardSequence++).padStart(5, "0")}`;
+  }
+  while (usedPaymentReferences.has(reference)) {
+    if (method === "UPI" || method === "Bank Transfer") {
+      reference = `TXN8802${String(nextTransferSequence++).padStart(2, "0")}`;
+    } else if (method === "Cheque") {
+      reference = String(nextChequeSequence++).padStart(6, "0");
+    } else {
+      reference = `C${String(nextCardSequence++).padStart(5, "0")}`;
+    }
+  }
+  usedPaymentReferences.add(reference);
+  return reference;
+};
+
+export const seedTransactions: Transaction[] = txns.map((transaction) => ({
+  ...transaction,
+  ...(transaction.type === "income" && !transaction.receiptNo
+    ? { receiptNo: nextIncomeReceiptNo() }
+    : {}),
+  ...(transaction.method !== "Cash" && !transaction.bankReference
+    ? { bankReference: nextPaymentReference(transaction.method) }
+    : {}),
+}));
 
 const bookMovements = [
   ...seedTransactions.map((transaction) => ({

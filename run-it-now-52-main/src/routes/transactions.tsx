@@ -19,6 +19,7 @@ import {
   INCOME_PAYMENT_METHODS, PAYMENT_MODES,
   type PaymentMethod, type PaymentMode, type Transaction,
 } from "@/finance/types";
+import { getPaymentReferenceState } from "@/finance/billing";
 import { useEnterToNext } from "@/hooks/use-enter-to-next";
 
 export const Route = createFileRoute("/transactions")({
@@ -28,14 +29,20 @@ export const Route = createFileRoute("/transactions")({
   }),
   head: () => ({
     meta: [
-      { title: "Daily Transactions â€” Finance & Accounts" },
+      { title: "Daily Transactions \u2014 Finance & Accounts" },
       { name: "description", content: "Record and review daily income and expense transactions." },
-      { property: "og:title", content: "Daily Transactions â€” Finance & Accounts" },
+      { property: "og:title", content: "Daily Transactions \u2014 Finance & Accounts" },
       { property: "og:description", content: "Record and review daily income and expense transactions." },
     ],
   }),
   component: TransactionsPage,
 });
+
+const entryDocumentNumber = (entry: LedgerEntry) => entry.receiptNo || entry.reference || "—";
+const entryPaymentReference = (entry: LedgerEntry) => {
+  if (entry.method === "Cash") return "—";
+  return (entry.source === "fee" ? entry.reference : entry.bankReference) || "—";
+};
 
 function TransactionsPage() {
   const { tab = "income", add } = Route.useSearch();
@@ -64,7 +71,8 @@ function TransactionsPage() {
     e.type === view &&
     (cat === "all" || e.category === cat) &&
     (paymentMode === "all" || ("paymentMode" in e && e.paymentMode === paymentMode)) &&
-    (!q || `${e.id} ${e.description} ${e.reference} ${"bankReference" in e ? e.bankReference ?? "" : ""}`.toLowerCase().includes(q.toLowerCase())));
+    (!q || `${e.description} ${e.category} ${entryDocumentNumber(e)} ${entryPaymentReference(e)}`
+      .toLowerCase().includes(q.toLowerCase())));
   const selectedEntries = ranged.filter((e) => e.type === view);
   const total = sum(selectedEntries.map((e) => e.amount));
   const ledgerOptions = view === "income" ? settings.incomeCategories : settings.expenseCategories;
@@ -96,18 +104,34 @@ function TransactionsPage() {
       </StatGrid>
       <SectionCard>
         <FilterBar>
-          <SearchBox value={q} onChange={setQ} placeholder="Search description, ledger name or reference" />
+          <SearchBox value={q} onChange={setQ} placeholder="Search description, ledger name, receipt, voucher or reference" />
           <DateRange from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
           <FilterSelect label="Ledger Name" allLabel="All ledger names" value={cat} onChange={setCat} options={ledgerOptions} />
           <FilterSelect label="Payment modes" value={paymentMode} onChange={setPaymentMode}
             options={[...PAYMENT_MODES]} all="All" />
         </FilterBar>
         {rows.length === 0 ? <EmptyState /> : (
-          <Table>
+          <Table className="table-fixed">
+            <colgroup>
+              <col className="w-[100px]" />
+              <col className="w-[140px]" />
+              <col />
+              <col className="w-[132px]" />
+              <col className="w-[116px]" />
+              <col className="w-[110px]" />
+              <col className="w-[150px]" />
+              <col className="w-[88px]" />
+              <col className="w-[124px]" />
+            </colgroup>
             <TableHeader><TableRow>
-              <TableHead>Date</TableHead><TableHead>Transaction ID</TableHead><TableHead>Description</TableHead><TableHead>Ledger Name</TableHead>
-              <TableHead className="text-right">Amount</TableHead><TableHead>Method</TableHead><TableHead>Reference</TableHead>
-              <TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
+              <TableHead className="whitespace-nowrap">Date</TableHead>
+              <TableHead className="whitespace-nowrap">{view === "income" ? "Receipt No." : "Voucher No."}</TableHead>
+              <TableHead>Description</TableHead><TableHead>Ledger Name</TableHead>
+              <TableHead className="whitespace-nowrap text-right">Amount</TableHead>
+              <TableHead className="whitespace-nowrap">Method</TableHead>
+              <TableHead className="whitespace-nowrap">Payment ref.</TableHead>
+              <TableHead className="whitespace-nowrap">Status</TableHead>
+              <TableHead className="whitespace-nowrap text-right">Actions</TableHead>
             </TableRow></TableHeader>
             <TableBody>
               {rows.map((e) => (
@@ -117,17 +141,15 @@ function TransactionsPage() {
                   rowLabel={`View transaction: ${e.description}`}
                 >
                   <TableCell className="whitespace-nowrap">{formatDate(e.date)}</TableCell>
-                  <TableCell className="whitespace-nowrap font-mono text-xs">
-                    {e.source === "txn" ? e.id : "—"}
-                  </TableCell>
+                  <TableCell className="whitespace-nowrap font-mono text-xs">{entryDocumentNumber(e)}</TableCell>
                   <TableCell>{e.description}</TableCell>
                   <TableCell>{e.category}</TableCell>
                   <TableCell className={`num whitespace-nowrap text-right font-medium ${e.type === "income" ? "text-success" : "text-destructive"}`}>
-                    {e.type === "income" ? "+" : "âˆ’"}{formatINR(e.amount)}
+                    {e.type === "income" ? "+" : "\u2212"}{formatINR(e.amount)}
                   </TableCell>
-                  <TableCell>{e.method}</TableCell>
-                  <TableCell className="num text-xs">{e.reference || "â€”"}</TableCell>
-                  <TableCell><StatusBadge status={e.status} /></TableCell>
+                  <TableCell className="whitespace-nowrap">{e.method}</TableCell>
+                  <TableCell className="num whitespace-nowrap text-xs">{entryPaymentReference(e)}</TableCell>
+                  <TableCell className="whitespace-nowrap"><StatusBadge status={e.status} /></TableCell>
                   <TableCell className="whitespace-nowrap text-right">
                     <Button variant="ghost" size="icon" aria-label="View" onClick={() => setViewing(e)}><Eye className="h-4 w-4" /></Button>
                     {e.source === "txn" ? (
@@ -164,9 +186,6 @@ function TransactionsPage() {
                 <h2 className="mb-4 border-b pb-3 text-center text-base font-semibold">Transaction details</h2>
                 <dl className="grid grid-cols-2 gap-3 text-sm">
                   {[
-                    ...(("source" in viewing && viewing.source === "txn")
-                      ? [["Transaction ID", viewing.id]]
-                      : []),
                     ["Receipt No.", ("receiptNo" in viewing && viewing.receiptNo) || viewing.reference || "—"],
                     ...(("source" in viewing && viewing.source === "txn" && viewing.bankReference)
                       ? [["Bank Reference / UTR No.", viewing.bankReference]]
@@ -241,6 +260,17 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
   const set = (k: keyof typeof f) => (v: string) => setF((x) => ({ ...x, [k]: v }));
   const cats = type === "income" ? settings.incomeCategories : settings.expenseCategories;
   const methods = txn?.method === "Card" ? [...INCOME_PAYMENT_METHODS, "Card"] : INCOME_PAYMENT_METHODS;
+  const paymentReferenceState = getPaymentReferenceState({
+    method: f.method,
+    reference: f.bankReference,
+    recordedPayments: [
+      ...payments.map((payment) => ({ method: payment.method, reference: payment.reference })),
+      ...transactions
+        .filter((entry) => entry.id !== txn?.id && !!entry.bankReference)
+        .map((entry) => ({ method: entry.method, reference: entry.bankReference! })),
+    ],
+    duplicateError: "This reference is already used for another entry.",
+  });
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -251,10 +281,10 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
     if (!f.category) e['category'] = "Choose a category";
     if (!f.method) e['method'] = "Choose a payment method";
     if (type === "income" && !f.description.trim()) e['description'] = "Description is required";
-    if (type === "expense" && !f.to.trim()) e['to'] = "Enter who was paid";
+    if (type === "expense" && !f.to.trim()) e['to'] = "Paid to is required";
     if (!f.receiptNo.trim()) e['receiptNo'] = "Receipt number is required";
     if (type === "income") {
-      if (!f.to.trim()) e['to'] = "To is required";
+      if (!f.to.trim()) e['to'] = "Received from is required";
       if (!f.paymentMode) e['paymentMode'] = "Choose a payment mode";
       if (f.receiptNo && (payments.some((p) => p.receiptNo === f.receiptNo) ||
         transactions.some((t) => t.id !== txn?.id && (t.receiptNo === f.receiptNo || t.reference === f.receiptNo)))) {
@@ -267,6 +297,7 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
         e['receiptNo'] = "Receipt number already exists";
       }
     }
+    if (!paymentReferenceState.isValid) e["bankReference"] = paymentReferenceState.error;
     setErrors(e);
     if (Object.keys(e).length) return;
     submitting.current = true;
@@ -274,7 +305,7 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
       id: txn?.id, type, date: f.date, amount: Number(f.amount), category: f.category, method: f.method as PaymentMethod,
       description: f.description.trim(), reference: f.receiptNo.trim(), status: txn?.status ?? "Posted",
       receiptNo: type === "income" ? f.receiptNo.trim() : undefined,
-      bankReference: f.bankReference.trim() ? f.bankReference : undefined,
+      bankReference: paymentReferenceState.normalizedReference || undefined,
       to: f.to.trim() || undefined,
       paymentMode: f.paymentMode as PaymentMode,
     });
@@ -297,12 +328,17 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
         <DialogHeader><DialogTitle>{txn ? "Edit" : "Add"} {type === "income" ? "income" : "expense"}</DialogTitle></DialogHeader>
         <form onSubmit={submit} onKeyDown={onEnterKeyDown} className="flex min-h-0 flex-col gap-3">
           <div className="grid min-w-0 grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2 lg:grid-cols-4">
-            <Field label="Receipt No." htmlFor="t-receipt" error={errors['receiptNo']}>
+            <Field label={type === "income" ? "Receipt No." : "Voucher No."} htmlFor="t-receipt" error={errors['receiptNo']}>
               <Input id="t-receipt" value={f.receiptNo} readOnly aria-readonly="true" tabIndex={-1} />
             </Field>
-            <Field label="Bank Reference / UTR No." htmlFor="t-bank-reference">
-              <Input id="t-bank-reference" value={f.bankReference} onChange={(e) => set("bankReference")(e.target.value)} />
-            </Field>
+            {paymentReferenceState.rule && (
+              <Field label={paymentReferenceState.label} htmlFor="t-bank-reference" error={paymentReferenceState.error}>
+                <Input id="t-bank-reference" value={f.bankReference}
+                  required
+                  onChange={(e) => set("bankReference")(e.target.value)}
+                  aria-invalid={!!paymentReferenceState.error} />
+              </Field>
+            )}
             <Field label="Date" htmlFor="t-date" error={errors['date']}>
               <Input id="t-date" type="date" value={f.date} onChange={(e) => set("date")(e.target.value)} autoFocus />
             </Field>
@@ -311,7 +347,7 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
                 placeholder={f.category && !cats.includes(f.category) ? f.category : "Select"}
                 onChange={set("category")} options={cats} />
             </Field>
-            <Field label="To" htmlFor="t-to" error={errors['to']}>
+            <Field label={type === "income" ? "Received from" : "Paid to"} htmlFor="t-to" error={errors['to']}>
               <Input id="t-to" value={f.to} onChange={(e) => set("to")(e.target.value)} />
             </Field>
             <div className="sm:col-span-2 lg:col-span-4">
@@ -320,9 +356,12 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
               </Field>
             </div>
             <Field label="Payment Method" htmlFor="t-m" error={errors['method']}>
-              <SimpleSelect id="t-m" value={f.method} onChange={set("method")} options={methods} />
+              <SimpleSelect id="t-m" value={f.method} onChange={(method) => {
+                setF((current) => ({ ...current, method: method as PaymentMethod | "", bankReference: "" }));
+                setErrors((current) => ({ ...current, bankReference: "" }));
+              }} options={methods} />
             </Field>
-            <Field label="Payment Mode" htmlFor="t-mode" error={errors['paymentMode']}>
+            <Field label="Payment mode" htmlFor="t-mode" error={errors['paymentMode']}>
               <SimpleSelect id="t-mode" value={f.paymentMode} onChange={set("paymentMode")}
                 options={[...PAYMENT_MODES]} />
             </Field>
@@ -334,7 +373,9 @@ function TxnDialog({ type, txn, onClose }: { type: "income" | "expense"; txn?: T
           </div>
           <DialogFooter className="shrink-0 flex-row justify-end gap-2 border-t pt-3">
             <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-            <Button type="submit">{type === "income" && !txn ? "Save Income" : txn ? "Save changes" : "Save Expense"}</Button>
+            <Button type="submit" disabled={!paymentReferenceState.isValid}>
+              {type === "income" && !txn ? "Save Income" : txn ? "Save changes" : "Save Expense"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

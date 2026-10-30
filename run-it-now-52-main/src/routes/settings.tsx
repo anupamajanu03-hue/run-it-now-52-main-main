@@ -18,9 +18,9 @@ export const Route = createFileRoute("/settings")({
   validateSearch: tabSearch,
   head: () => ({
     meta: [
-      { title: "Finance Settings â€” Finance & Accounts" },
+      { title: "Finance Settings \u2014 Finance & Accounts" },
       { name: "description", content: "Institution details, course catalog, categories, payment methods, receipts and financial year." },
-      { property: "og:title", content: "Finance Settings â€” Finance & Accounts" },
+      { property: "og:title", content: "Finance Settings \u2014 Finance & Accounts" },
       { property: "og:description", content: "Institution details, course catalog, categories, payment methods, receipts and financial year." },
     ],
   }),
@@ -207,7 +207,7 @@ function YearTab() {
         <Field label="End date" htmlFor="y-e"><Input id="y-e" type="date" value={f.end} onChange={(e) => setF({ ...f, end: e.target.value })} /></Field>
       </div>
       {err && <p className="mt-2 text-xs text-destructive">{err}</p>}
-      <p className="mt-3 text-sm text-muted-foreground">Currency: {settings.currency.code} ({settings.currency.symbol}) Â· {settings.currency.grouping} grouping</p>
+      <p className="mt-3 text-sm text-muted-foreground">Currency: {settings.currency.code} ({settings.currency.symbol}) \u00B7 {settings.currency.grouping} grouping</p>
       <div className="mt-4 flex justify-end"><Button type="submit">Save changes</Button></div>
       </form>
     </SectionCard>

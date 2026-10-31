@@ -1,3 +1,5 @@
+import { ADMISSION_FEE_LABEL } from "./labels";
+
 export type PaymentMethod =
   "Cash" | "UPI" | "Bank Transfer" | "Debit Card" | "Credit Card" | "Cheque" | "Card" | "Other";
 export const PAYMENT_METHODS: PaymentMethod[] = ["Cash", "UPI", "Bank Transfer", "Cheque"];
@@ -225,7 +227,7 @@ export interface FeePayment {
   towards?: PaymentTowards | undefined;
   towardsOther?: string | undefined;
 }
-export const PAYMENT_TOWARDS = ["Registration", "Instalments", "Exam fee", "Other"] as const;
+export const PAYMENT_TOWARDS = [ADMISSION_FEE_LABEL, "Instalments", "Exam fee", "Other"] as const;
 export type PaymentTowards = (typeof PAYMENT_TOWARDS)[number];
 
 export interface FeeReminder {

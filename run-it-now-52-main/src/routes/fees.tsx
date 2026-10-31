@@ -80,6 +80,7 @@ import { Receipt } from "@/components/finance/Receipt";
 import { AdministrationHistory } from "@/components/finance/AdministrationHistory";
 import { ApplicationDetail, ApplicationDetails } from "@/components/finance/ApplicationDetails";
 import { displayInstallmentLabel } from "@/finance/types";
+import { ADMISSION_FEE_LABEL } from "@/finance/labels";
 import { useRecordPayment } from "@/components/finance/RecordPaymentContext";
 import { useFinance } from "@/finance/store";
 import {
@@ -379,8 +380,21 @@ function Applications() {
     baseRows,
     feeWorkflow.payments,
     feeWorkflow.handoffs,
-    stageFilter,
-  );
+    stageFilter ?? "All",
+  ).sort((left, right) => {
+    const stagePriority: Record<ApplicationStage, number> = {
+      "To review": 1,
+      "Awaiting payment": 2,
+      "Ready to send": 3,
+      "With Administration": 4,
+      Admitted: 5,
+    };
+    return (
+      stagePriority[statusFor(left)] - stagePriority[statusFor(right)] ||
+      right.appliedOn.localeCompare(left.appliedOn) ||
+      right.applicationId.localeCompare(left.applicationId)
+    );
+  });
   const stageCounts = (stage: ApplicationStage) =>
     filterApplicationsByStage(
       baseRows,
@@ -416,13 +430,13 @@ function Applications() {
       : alreadySent
         ? "Awaiting Administration"
         : "Pending";
-  const registrationPaid = !!view && canSendToAdministration(view, payments);
-  const canSend = !!view && accountantVerified && registrationPaid && !alreadySent;
+  const admissionFeePaid = !!view && canSendToAdministration(view, payments);
+  const canSend = !!view && accountantVerified && admissionFeePaid && !alreadySent;
   const viewStage = view ? statusFor(view) : null;
   const sendDisabledReason = !accountantVerified
     ? "Mark reviewed first"
-    : !registrationPaid
-      ? "Registration installment unpaid"
+    : !admissionFeePaid
+      ? `${ADMISSION_FEE_LABEL} installment unpaid`
       : undefined;
   const sendDetails = () => {
     if (!view || !canSend) return;
@@ -439,7 +453,7 @@ function Applications() {
             key={stage}
             type="button"
             aria-pressed={stageFilter === stage}
-            onClick={() => setStageFilter(stage)}
+            onClick={() => setStageFilter(stageFilter === stage ? null : stage)}
             className={`rounded-2xl text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
               stageFilter === stage ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""
             }`}
@@ -497,18 +511,18 @@ function Applications() {
         {rows.length === 0 ? (
           <EmptyState message="No applications found" />
         ) : (
-          <div className="overflow-x-auto">
-            <Table>
+          <div>
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Application ID</TableHead>
-                  <TableHead>Applicant</TableHead>
-                  <TableHead>Contact</TableHead>
-                  <TableHead>Course</TableHead>
-                  <TableHead>Applied on</TableHead>
-                  <TableHead className="text-right">Fee payable</TableHead>
-                  <TableHead>Stage</TableHead>
-                  <TableHead>Next action</TableHead>
+                  <TableHead className="w-[14%] whitespace-normal">Application ID</TableHead>
+                  <TableHead className="w-[13%] whitespace-normal">Applicant</TableHead>
+                  <TableHead className="w-[10%] whitespace-normal">Contact</TableHead>
+                  <TableHead className="w-[14%] whitespace-normal">Course</TableHead>
+                  <TableHead className="w-[10%] whitespace-normal">Applied on</TableHead>
+                  <TableHead className="w-[12%] whitespace-normal text-right">Fee payable</TableHead>
+                  <TableHead className="w-[13%] whitespace-normal">Stage</TableHead>
+                  <TableHead className="w-[14%] whitespace-normal">Next action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -518,10 +532,10 @@ function Applications() {
                     onRowClick={() => setView(person)}
                     rowLabel={`View application for ${person.name}`}
                   >
-                    <TableCell className="whitespace-nowrap">{person.applicationId}</TableCell>
-                    <TableCell className="whitespace-nowrap">{person.name}</TableCell>
-                    <TableCell className="whitespace-nowrap">{person.contact}</TableCell>
-                    <TableCell className="whitespace-nowrap">{person.course}</TableCell>
+                    <TableCell className="break-all">{person.applicationId}</TableCell>
+                    <TableCell className="break-words">{person.name}</TableCell>
+                    <TableCell className="break-all">{person.contact}</TableCell>
+                    <TableCell className="break-words">{person.course}</TableCell>
                     <TableCell className="whitespace-nowrap">
                       {formatDate(person.appliedOn)}
                     </TableCell>
@@ -533,10 +547,10 @@ function Applications() {
                         ).payable,
                       )}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="break-words">
                       <StatusBadge status={statusFor(person)} />
                     </TableCell>
-                    <TableCell>{actionForStage(statusFor(person))}</TableCell>
+                    <TableCell className="break-words">{actionForStage(statusFor(person))}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

@@ -1,5 +1,6 @@
 import { addMonthsISO, canonicalAdmissionNo } from "./billing";
 import { demoDate } from "./demoDates";
+import { ADMISSION_FEE_LABEL } from "./labels";
 import type {
   ApplicationStatus,
   FeeWorkflowPayment,
@@ -26,17 +27,17 @@ export const MAX_REMINDERS = 2;
 // Demo only: class access is on hold when any installment is overdue. Enforcing this requires a future LMS integration.
 export const DEMO_FEE_PLANS: Record<string, { label: string; amount: number }[]> = {
   Python: [
-    { label: "Registration", amount: 6000 },
+    { label: ADMISSION_FEE_LABEL, amount: 6000 },
     { label: "Instalment 1", amount: 5000 },
     { label: "Instalment 2", amount: 5000 },
   ],
   Tally: [
-    { label: "Registration", amount: 4000 },
+    { label: ADMISSION_FEE_LABEL, amount: 4000 },
     { label: "Instalment 1", amount: 4000 },
     { label: "Instalment 2", amount: 4000 },
   ],
   "Advanced Data Science": [
-    { label: "Registration", amount: 25000 },
+    { label: ADMISSION_FEE_LABEL, amount: 25000 },
     { label: "Instalment 1", amount: 25000 },
     { label: "Instalment 2", amount: 25000 },
   ],
@@ -106,7 +107,7 @@ export function buildPlan(
   const configuredPlan = installments.length
     ? installments
     : (DEMO_FEE_PLANS[course] ?? [
-        { label: "Registration", amount: 10000 },
+        { label: ADMISSION_FEE_LABEL, amount: 10000 },
         { label: "Instalment 1", amount: 10000 },
       ]);
   if (installmentCount !== undefined && !Number.isInteger(installmentCount)) {
@@ -118,11 +119,13 @@ export function buildPlan(
 
   if (installmentCount !== undefined) {
     const total = configuredPlan.reduce((sum, installment) => sum + installment.amount, 0);
-    const registration = configuredPlan.find((installment) => installment.label === "Registration");
-    const installmentTotal = total - (registration?.amount ?? 0);
+    const admissionFee = configuredPlan.find(
+      (installment) => installment.label === ADMISSION_FEE_LABEL,
+    );
+    const installmentTotal = total - (admissionFee?.amount ?? 0);
     const installmentAmount = Math.floor(installmentTotal / count);
     plan = [
-      ...(registration ? [registration] : []),
+      ...(admissionFee ? [admissionFee] : []),
       ...Array.from({ length: count }, (_, index) => ({
         label: `Instalment ${index + 1}`,
         amount:
@@ -141,7 +144,7 @@ export function buildPlan(
   } else {
     let installmentIndex = 0;
     plan = configuredPlan.map((installment) =>
-      installment.label === "Registration"
+      installment.label === ADMISSION_FEE_LABEL
         ? installment
         : { ...installment, label: `Instalment ${++installmentIndex}` },
     );
@@ -575,7 +578,7 @@ export function newDemoApplicants(): Person[] {
       applicant.course,
       applicant.appliedOn,
       DEMO_FEE_PLANS[applicant.course] ?? [
-        { label: "Registration", amount: 10000 },
+        { label: ADMISSION_FEE_LABEL, amount: 10000 },
         { label: "Instalment 1", amount: 10000 },
       ],
     ),
